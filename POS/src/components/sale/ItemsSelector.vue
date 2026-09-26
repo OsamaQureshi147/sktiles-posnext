@@ -550,7 +550,23 @@
 							>
 								{{ Object.values(item.attributes).join(" / ") }}
 							</p>
-							<p class="text-[9px] sm:text-[10px] text-gray-500 leading-tight">
+							<!-- Price per UOM (Tile items only) -->
+							<ul
+								v-if="getUomPriceList(item)"
+								class="flex flex-col gap-0.5 text-[9px] sm:text-[10px] text-gray-500 leading-tight"
+							>
+								<li
+									v-for="uomPrice in getUomPriceList(item)"
+									:key="uomPrice.uom"
+									class="flex items-baseline justify-between gap-1"
+								>
+									<span class="font-semibold text-blue-600 truncate">{{
+										formatCurrency(uomPrice.rate)
+									}}</span>
+									<span class="text-gray-400 shrink-0">/ {{ uomPrice.uom }}</span>
+								</li>
+							</ul>
+							<p v-else class="text-[9px] sm:text-[10px] text-gray-500 leading-tight">
 								<span class="font-semibold text-blue-600">{{
 									formatCurrency(item.rate || item.price_list_rate || 0)
 								}}</span>
@@ -1448,6 +1464,28 @@ function handleItemClick(itemCode) {
 
 function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
+}
+
+// Item groups whose cards list the price of every UOM (compared case-insensitively)
+const UOM_PRICE_LIST_ITEM_GROUPS = ["tile"];
+
+/**
+ * Price per UOM for the item card: stock UOM first, then alternative UOMs.
+ * Uses the UOM-specific Item Price when present, otherwise derives it from
+ * the stock UOM rate via the conversion factor (same as ItemSelectionDialog).
+ * Returns null for items outside UOM_PRICE_LIST_ITEM_GROUPS or with a single UOM.
+ */
+function getUomPriceList(item) {
+	const group = (item.item_group || "").trim().toLowerCase();
+	if (!UOM_PRICE_LIST_ITEM_GROUPS.includes(group) || !item.item_uoms?.length) return null;
+
+	const baseRate = item.rate || item.price_list_rate || 0;
+	const uoms = [{ uom: item.stock_uom, conversion_factor: 1 }, ...item.item_uoms];
+
+	return uoms.map(({ uom, conversion_factor }) => ({
+		uom,
+		rate: item.uom_prices?.[uom] || baseRate * (conversion_factor || 1),
+	}));
 }
 
 // Show warehouse availability dialog
