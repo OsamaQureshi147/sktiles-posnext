@@ -355,13 +355,6 @@
 						"
 					/>
 
-					<div class="w-px h-4 sm:h-6 bg-gray-200 hidden md:block"></div>
-
-					<!-- Language Switcher - Hidden on mobile, shown in UserMenu instead -->
-					<div class="hidden md:block">
-						<LanguageSwitcher />
-					</div>
-
 					<div class="w-px h-4 sm:h-6 bg-gray-200"></div>
 
 					<!-- User Menu -->
@@ -390,7 +383,6 @@
 import ActionButton from "@/components/common/ActionButton.vue";
 import StatusBadge from "@/components/common/StatusBadge.vue";
 import UserMenu from "@/components/common/UserMenu.vue";
-import LanguageSwitcher from "@/components/common/LanguageSwitcher.vue";
 import { DEFAULT_LOCALE } from "@/utils/currency";
 import { ref } from "vue";
 import { version } from "../../../package.json";
