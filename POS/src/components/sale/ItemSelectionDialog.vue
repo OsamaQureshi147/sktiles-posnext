@@ -198,9 +198,9 @@
 									ref="quantityInput"
 									v-model.number="quantity"
 									type="number"
-									min="1"
-									step="1"
-									inputmode="numeric"
+									:min="allowDecimalQty ? 0.001 : 1"
+									:step="allowDecimalQty ? 'any' : 1"
+									:inputmode="allowDecimalQty ? 'decimal' : 'numeric'"
 									class="w-full text-center border-0 text-sm font-semibold focus:outline-none focus:ring-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
 									@blur="validateQuantity"
 									@keydown.enter="confirm"
@@ -232,6 +232,34 @@
 								{{ qty }}
 							</button>
 						</div>
+					</div>
+
+					<!-- UOM Conversion Breakdown (Tile items only) -->
+					<div
+						v-if="tileBreakdown"
+						class="bg-amber-50 border border-amber-200 rounded-xl p-3 text-start"
+					>
+						<p class="text-sm font-medium text-gray-700 mb-2">
+							{{ __("Equivalent Quantity") }}
+						</p>
+						<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+							<template v-for="(segment, index) in tileBreakdown.segments" :key="index">
+								<span v-if="index > 0" class="text-gray-400">=</span>
+								<span
+									:class="
+										index === 0 ? 'text-gray-600' : 'font-bold text-amber-700'
+									"
+								>
+									{{ segment }}
+								</span>
+							</template>
+						</p>
+						<ul
+							v-if="tileBreakdown.references.length > 0"
+							class="flex flex-col gap-0.5 mt-2 text-xs text-gray-500"
+						>
+							<li v-for="line in tileBreakdown.references" :key="line">{{ line }}</li>
+						</ul>
 					</div>
 
 					<!-- Price Summary -->
@@ -431,10 +459,124 @@ const stockWarning = computed(() => {
 	return null;
 });
 
+// Item groups that show the UOM conversion breakdown (compared case-insensitively)
+const UOM_CONVERSION_ITEM_GROUPS = ["tile"];
+
+const showUomConversions = computed(() => {
+	const group = (props.item?.item_group || "").trim().toLowerCase();
+	return props.mode === "uom" && UOM_CONVERSION_ITEM_GROUPS.includes(group);
+});
+
+// UOM names treated as area units (normalized: lowercase, alphanumerics only)
+const AREA_UOM_NAMES = [
+	"sqm",
+	"sqmeter",
+	"sqmeters",
+	"sqmtr",
+	"squaremeter",
+	"squaremeters",
+	"squaremetre",
+	"squaremetres",
+	"m2",
+	"sqft",
+	"squarefoot",
+	"squarefeet",
+];
+
+function isAreaUom(uom) {
+	return AREA_UOM_NAMES.includes((uom || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+// Avoid floating point noise (e.g. 3.0000000004) before ceil/floor
+function roundPrecise(value) {
+	return Math.round(value * 1e6) / 1e6;
+}
+
 /**
- * Validates quantity input ensuring it's a valid positive integer
+ * Tile breakdown based on conversion factors (all relative to stock UOM):
+ * - Area UOMs (SQM, etc.) show the fractional area equivalent
+ * - Count UOMs (Box, Piece, ...) show a whole-unit breakdown, largest first,
+ *   with the smallest count unit rounded up (Math.ceil)
+ *   e.g. 10 SQM = 5 Box + 2 Piece, 70 Piece = 12.25 SQM = 6 Box + 4 Piece
+ */
+const tileBreakdown = computed(() => {
+	if (!showUomConversions.value || !selectedOption.value) return null;
+
+	const qty = quantity.value || 0;
+	const selected = selectedOption.value;
+	const stockQty = qty * (selected.conversion_factor || 1);
+
+	const validOptions = options.value.filter((opt) => opt.conversion_factor > 0);
+	const areaOptions = validOptions.filter((opt) => isAreaUom(opt.uom));
+	const countOptions = validOptions
+		.filter((opt) => !isAreaUom(opt.uom))
+		.sort((a, b) => b.conversion_factor - a.conversion_factor);
+
+	if (validOptions.length < 2) return null;
+
+	const segments = [`${formatQty(qty)} ${selected.uom}`];
+
+	// Area equivalents (skip the selected UOM itself)
+	areaOptions
+		.filter((opt) => opt.uom !== selected.uom)
+		.forEach((opt) => {
+			segments.push(`${formatQty(stockQty / opt.conversion_factor)} ${opt.uom}`);
+		});
+
+	// Whole-unit count breakdown, e.g. "6 Box + 4 Piece"
+	const references = [];
+	if (countOptions.length > 0) {
+		const smallest = countOptions[countOptions.length - 1];
+		let remaining = Math.ceil(roundPrecise(stockQty / smallest.conversion_factor));
+
+		const parts = [];
+		countOptions.forEach((opt, index) => {
+			const perUnit = Math.max(1, Math.round(opt.conversion_factor / smallest.conversion_factor));
+			const isLast = index === countOptions.length - 1;
+			const count = isLast ? remaining : Math.floor(remaining / perUnit);
+			remaining -= count * perUnit;
+			if (count > 0) parts.push(`${count} ${opt.uom}`);
+
+			if (!isLast) {
+				references.push(`1 ${opt.uom} = ${formatQty(perUnit)} ${smallest.uom}`);
+			}
+		});
+
+		const breakdown = parts.join(" + ") || `0 ${smallest.uom}`;
+		if (breakdown !== segments[0]) segments.push(breakdown);
+
+		areaOptions.forEach((opt) => {
+			references.push(
+				`1 ${smallest.uom} = ${formatQty(smallest.conversion_factor / opt.conversion_factor)} ${opt.uom}`
+			);
+		});
+	}
+
+	if (segments.length < 2) return null;
+	return { segments, references };
+});
+
+function formatQty(value) {
+	return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+// Area UOMs (SQM, etc.) allow decimal quantities, e.g. 10.5 SQM
+const allowDecimalQty = computed(() => isAreaUom(selectedOption.value?.uom));
+
+/**
+ * Validates quantity input ensuring it's a valid positive number
+ * (integer, or up to 3 decimals for area UOMs)
  */
 function validateQuantity() {
+	if (allowDecimalQty.value) {
+		if (!quantity.value || isNaN(quantity.value) || quantity.value <= 0) {
+			quantity.value = 1;
+		} else {
+			quantity.value = Math.round(quantity.value * 1000) / 1000;
+		}
+		return;
+	}
+
 	// Handle invalid, negative, or decimal values
 	if (!quantity.value || isNaN(quantity.value) || quantity.value < 1) {
 		quantity.value = 1;
@@ -444,14 +586,19 @@ function validateQuantity() {
 	}
 }
 
+// Re-validate when switching to a whole-number UOM (e.g. 10.5 SQM → Box)
+watch(allowDecimalQty, (allowDecimal) => {
+	if (!allowDecimal) validateQuantity();
+});
+
 // Quantity counter functions
 function incrementQuantity() {
-	quantity.value = Math.max(1, quantity.value + 1);
+	quantity.value = roundPrecise(Math.max(1, quantity.value + 1));
 }
 
 function decrementQuantity() {
 	if (quantity.value > 1) {
-		quantity.value = quantity.value - 1;
+		quantity.value = roundPrecise(Math.max(1, quantity.value - 1));
 	}
 }
 
