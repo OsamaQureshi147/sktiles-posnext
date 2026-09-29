@@ -476,7 +476,7 @@
 import { useToast } from "@/composables/useToast";
 import { usePOSSettingsStore } from "@/stores/posSettings";
 import { useSerialNumberStore } from "@/stores/serialNumber";
-import { getItemStock } from "@/utils/stockValidator";
+import { getItemStock, shouldValidateItemStock } from "@/utils/stockValidator";
 import {
 	formatCurrency as formatCurrencyUtil,
 	getCurrencySymbol,
@@ -793,7 +793,22 @@ async function handleWarehouseChange() {
 		// Check stock availability in the new warehouse
 		const availableStock = await getItemStock(localItem.value.item_code, localWarehouse.value);
 
-		if (availableStock === 0) {
+		// Negative stock allowed (POS / Stock Settings or the item itself): any warehouse can be picked
+		const enforceStock =
+			settingsStore.shouldEnforceStockValidation() && shouldValidateItemStock(localItem.value);
+
+		if (!enforceStock) {
+			hasStock.value = true;
+			if (availableStock < localQuantity.value) {
+				showWarning(
+					__('Only {0} units of "{1}" available in "{2}". Stock will go negative.', [
+						availableStock,
+						localItem.value.item_name,
+						localWarehouse.value,
+					])
+				);
+			}
+		} else if (availableStock <= 0) {
 			hasStock.value = false;
 			showError(
 				__('"{0}" is not available in warehouse "{1}". Please select another warehouse.', [

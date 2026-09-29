@@ -165,7 +165,13 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 
 	// Computed - Miscellaneous
 	const inputQty = computed(() => Boolean(settings.value.input_qty));
-	const allowNegativeStock = computed(() => Boolean(settings.value.allow_negative_stock));
+	// Negative stock is allowed by POS Settings or globally by ERPNext Stock Settings
+	// (mirrors the backend check in invoices._should_block)
+	const allowNegativeStock = computed(
+		() =>
+			Boolean(settings.value.allow_negative_stock) ||
+			Boolean(settings.value._global_allow_negative_stock)
+	);
 
 	// Computed - Sales Persons
 	const enableSalesPersons = computed(() => settings.value.enable_sales_persons !== "Disabled");
@@ -305,7 +311,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	 * @returns {boolean} - True if negative stock is allowed
 	 */
 	function isNegativeStockAllowed() {
-		return isEnabled.value && Boolean(settings.value.allow_negative_stock);
+		return isEnabled.value && allowNegativeStock.value;
 	}
 
 	/**
@@ -313,7 +319,7 @@ export const usePOSSettingsStore = defineStore("posSettings", () => {
 	 * @returns {boolean} - True if stock validation should prevent negative stock
 	 */
 	function shouldEnforceStockValidation() {
-		return isEnabled.value && !Boolean(settings.value.allow_negative_stock);
+		return isEnabled.value && !allowNegativeStock.value;
 	}
 
 	/**

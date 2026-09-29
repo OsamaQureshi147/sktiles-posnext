@@ -222,6 +222,10 @@ def _get_pos_settings(pos_profile_doc):
 			1 if (pos_profile_doc.write_off_account and (pos_profile_doc.write_off_limit or 0) > 0) else 0
 		)
 		settings["disable_rounded_total"] = pos_profile_doc.disable_rounded_total or 0
+		# ERPNext Stock Settings also allows negative stock (same as get_pos_settings / _should_block)
+		settings["_global_allow_negative_stock"] = frappe.db.get_single_value(
+			"Stock Settings", "allow_negative_stock"
+		) or 0
 
 		return settings
 	except Exception:

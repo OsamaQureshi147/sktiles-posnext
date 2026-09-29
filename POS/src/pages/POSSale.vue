@@ -599,7 +599,10 @@
 				:company="shiftStore.profileCompany"
 				:default-warehouse="shiftStore.profileWarehouse"
 				:warehouses="profileWarehouses"
-				:enforce-stock="settingsStore.shouldEnforceStockValidation()"
+				:enforce-stock="
+					settingsStore.shouldEnforceStockValidation() &&
+					shouldValidateItemStock(warehousePickerItem)
+				"
 				@warehouse-selected="handleWarehouseSelected"
 			/>
 
