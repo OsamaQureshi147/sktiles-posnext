@@ -1107,6 +1107,7 @@ import {
 	isLocalOnlyInvoiceName,
 	printInvoice,
 	printInvoiceByName,
+	printQuotation,
 	printWarehouseCopy,
 	printWithSilentFallback,
 } from "@/utils/printInvoice";
@@ -2066,7 +2067,7 @@ function handleCustomerSelected(selectedCustomer) {
 
 		if (pendingPaymentAfterCustomer.value) {
 			pendingPaymentAfterCustomer.value = false;
-			uiStore.showPaymentDialog = true;
+			handleProceedToPayment();
 		}
 	} else {
 		cartStore.setCustomer(null);
@@ -2099,7 +2100,43 @@ function handleProceedToPayment() {
 		return;
 	}
 
+	if (cartStore.targetDoctype === "Quotation") {
+		handleSaveQuotation();
+		return;
+	}
+
 	uiStore.showPaymentDialog = true;
+}
+
+// Quotation: no payment dialog — save, print, and start a fresh cart
+const isSavingQuotation = ref(false);
+
+async function handleSaveQuotation() {
+	if (isSavingQuotation.value) return;
+	isSavingQuotation.value = true;
+	try {
+		const result = await cartStore.createQuotation();
+		if (!result?.name) return;
+
+		cartStore.clearCart();
+		previousCartHash = "";
+		showSuccess(__("Quotation {0} created", [result.name]));
+
+		try {
+			await printQuotation(result.name, shiftStore.quotationPrintFormat, {
+				silent: posSettingsStore.silentPrint,
+			});
+		} catch (error) {
+			log.error("Error printing quotation:", error);
+			showError(error?.message || __("Failed to print quotation"));
+		}
+	} catch (error) {
+		log.error("Error creating quotation:", error);
+		const errorContext = parseError(error);
+		showError(errorContext.message || __("Failed to create quotation"));
+	} finally {
+		isSavingQuotation.value = false;
+	}
 }
 
 async function handleDeleteFailedInvoice() {
@@ -2326,6 +2363,7 @@ async function handlePaymentCompleted(paymentData) {
 
 				uiStore.showPaymentDialog = false;
 				cartStore.clearCart();
+				cartStore.refreshCustomerBalance();
 				// Reset cart hash after successful payment
 				previousCartHash = "";
 
@@ -2611,6 +2649,7 @@ async function handleLoadDraft(draft) {
 function handleReturnCreated(returnInvoice) {
 	// Success message is already shown by ReturnInvoiceDialog
 	log.debug("Return invoice created:", returnInvoice.name);
+	cartStore.refreshCustomerBalance();
 }
 
 function handleDiscountApplied(discount) {

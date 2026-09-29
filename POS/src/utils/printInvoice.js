@@ -594,6 +594,32 @@ export async function printWarehouseCopy(invoiceName, printFormat, { silent = fa
 }
 
 // ============================================================================
+// Quotation
+// ============================================================================
+
+/**
+ * Print a submitted Quotation with the POS Profile's quotation print format
+ * (Frappe's "Standard" format when none is set).
+ */
+export async function printQuotation(quotationName, printFormat = null, { silent = false } = {}) {
+	if (!quotationName) throw new Error("Invalid quotation — missing name");
+	const format = printFormat || "Standard";
+
+	if (silent) {
+		try {
+			await silentPrintDoc("Quotation", quotationName, format);
+			log.info(`Silent quotation print sent for ${quotationName}`);
+			return { method: "silent", success: true };
+		} catch (err) {
+			log.warn("Silent quotation print failed, falling back to browser:", err?.message || err);
+		}
+	}
+
+	openPrintView("Quotation", quotationName, format);
+	return { method: "browser", success: true };
+}
+
+// ============================================================================
 // Hardcoded receipt fallback (used only when /printview popup is blocked)
 // ============================================================================
 

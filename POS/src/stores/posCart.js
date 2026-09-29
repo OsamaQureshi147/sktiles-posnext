@@ -6,6 +6,7 @@ import { parseError } from "@/utils/errorHandler";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
 import { offlineState } from "@/utils/offline/offlineState";
 import { useToast } from "@/composables/useToast";
+import { call } from "@/utils/apiWrapper";
 import { defineStore } from "pinia";
 import { computed, nextTick, ref, toRaw, watch } from "vue";
 
@@ -251,6 +252,14 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		syncOfferSnapshot();
 	}
 
+	// Bumped after anything that changes a customer's receivable balance
+	// (sale, return) so the cart re-fetches the displayed balance.
+	const customerBalanceVersion = ref(0);
+
+	function refreshCustomerBalance() {
+		customerBalanceVersion.value++;
+	}
+
 	function setTargetDoctype(doctype) {
 		targetDoctype.value = doctype;
 	}
@@ -301,6 +310,36 @@ export const usePOSCartStore = defineStore("posCart", () => {
 
 	async function createSalesOrder() {
 		return await submitInvoice();
+	}
+
+	/**
+	 * Create and submit a Quotation from the current cart (online only).
+	 * Payments, stock and coupons are not involved.
+	 */
+	async function createQuotation() {
+		if (invoiceItems.value.length === 0) {
+			showWarning(__("Cart is empty"));
+			return null;
+		}
+		const customerName =
+			customer.value?.name || customer.value || usePOSShiftStore().profileCustomer;
+		if (!customerName) {
+			showWarning(__("Please select a customer"));
+			return null;
+		}
+		if (offlineState.isOffline) {
+			showWarning(__("Quotations can only be created while online"));
+			return null;
+		}
+
+		return await call("pos_next.api.quotations.create_quotation", {
+			data: {
+				pos_profile: posProfile.value,
+				customer: customerName,
+				items: formatItemsForSubmission(toRaw(invoiceItems.value)),
+				discount_amount: additionalDiscount.value || 0,
+			},
+		});
 	}
 
 	function syncOneTimeContextForCurrentCustomer() {
@@ -1934,7 +1973,12 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		targetDoctype,
 		setTargetDoctype,
 		createSalesOrder,
+		createQuotation,
 		deliveryDate,
+
+		// Customer balance
+		customerBalanceVersion,
+		refreshCustomerBalance,
 		setDeliveryDate,
 
 		// Write-off feature

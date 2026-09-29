@@ -24,6 +24,10 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 	const warehousePrintFormat = computed(
 		() => currentProfile.value?.posa_warehouse_print_format || null
 	);
+	const allowQuotation = computed(() => Boolean(currentProfile.value?.posa_allow_quotation));
+	const quotationPrintFormat = computed(
+		() => currentProfile.value?.posa_quotation_print_format || null
+	);
 	const askWarehouseCopy = computed(
 		() => Boolean(currentProfile.value?.posa_ask_warehouse_copy) && Boolean(warehousePrintFormat.value)
 	);
@@ -113,6 +117,8 @@ export const usePOSShiftStore = defineStore("posShift", () => {
 		letterHead,
 		warehousePrintFormat,
 		askWarehouseCopy,
+		allowQuotation,
+		quotationPrintFormat,
 		writeOffAccount,
 		writeOffCostCenter,
 		writeOffLimit,

@@ -359,6 +359,12 @@
 								<p class="text-sm font-semibold text-gray-900">
 									{{ originalInvoice.customer_name }}
 								</p>
+								<CustomerBalance
+									:customer="originalInvoice.customer"
+									:company="originalInvoice.company"
+									:currency="currency"
+									class="text-xs mt-0.5"
+								/>
 							</div>
 							<div class="flex items-center justify-between">
 								<div class="text-start">
@@ -400,6 +406,12 @@
 									<p class="text-sm font-semibold text-gray-900">
 										{{ originalInvoice.customer_name }}
 									</p>
+									<CustomerBalance
+										:customer="originalInvoice.customer"
+										:company="originalInvoice.company"
+										:currency="currency"
+										class="text-xs mt-0.5"
+									/>
 								</div>
 								<div class="text-start">
 									<p class="text-xs text-gray-500 mb-1">{{ __("Date") }}</p>
@@ -1179,6 +1191,7 @@
 </template>
 
 <script setup>
+import CustomerBalance from "@/components/common/CustomerBalance.vue";
 import { useOfflineStatus } from "@/composables/useOfflineStatus";
 import { useToast } from "@/composables/useToast";
 import { getPaymentIcon } from "@/utils/payment";

@@ -105,27 +105,12 @@
 									>
 										{{ customer.mobile_no }}
 									</p>
-									<p
-										v-if="customerBalance"
-										class="text-[10px] font-semibold truncate leading-tight"
-										:class="
-											customerBalance.net_balance > 0
-												? 'text-red-600'
-												: customerBalance.net_balance < 0
-													? 'text-green-600'
-													: 'text-gray-500'
-										"
-									>
-										<template v-if="customerBalance.net_balance > 0">
-											{{ __("Outstanding") }}:
-											{{ formatCurrency(customerBalance.net_balance) }}
-										</template>
-										<template v-else-if="customerBalance.net_balance < 0">
-											{{ __("Credit") }}:
-											{{ formatCurrency(-customerBalance.net_balance) }}
-										</template>
-										<template v-else>{{ __("No outstanding balance") }}</template>
-									</p>
+									<CustomerBalance
+										:customer="customer.name || customer"
+										:company="company"
+										:currency="currency"
+										class="text-[10px] leading-tight"
+									/>
 								</div>
 							</div>
 
@@ -196,7 +181,7 @@
 
 						<!-- Document Type Card -->
 						<div
-							v-if="settingsStore.allowSalesOrder"
+							v-if="showDocTypeToggle"
 							class="flex items-center bg-white border border-gray-200 rounded-xl p-1.5 shadow-sm flex-shrink-0"
 						>
 							<div class="flex items-center bg-gray-100 rounded-lg p-0.5">
@@ -227,6 +212,7 @@
 									<span>{{ __("Invoice") }}</span>
 								</button>
 								<button
+									v-if="settingsStore.allowSalesOrder"
 									type="button"
 									@click="selectDocType('Sales Order')"
 									class="px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-all duration-200 flex items-center gap-1"
@@ -251,6 +237,33 @@
 										/>
 									</svg>
 									<span>{{ __("Order") }}</span>
+								</button>
+								<button
+									v-if="shiftStore.allowQuotation"
+									type="button"
+									@click="selectDocType('Quotation')"
+									class="px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-all duration-200 flex items-center gap-1"
+									:class="
+										cartStore.targetDoctype === 'Quotation'
+											? 'bg-white text-purple-600 shadow-sm'
+											: 'text-gray-500 hover:text-gray-700'
+									"
+									:title="__('Quotation')"
+								>
+									<svg
+										class="w-3.5 h-3.5"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+										/>
+									</svg>
+									<span>{{ __("Quote") }}</span>
 								</button>
 							</div>
 						</div>
@@ -325,9 +338,9 @@
 							</svg>
 						</button>
 
-						<!-- Document Type Toggle (Sales Invoice / Sales Order) -->
+						<!-- Document Type Toggle (Sales Invoice / Sales Order / Quotation) -->
 						<div
-							v-if="settingsStore.allowSalesOrder"
+							v-if="showDocTypeToggle"
 							class="flex items-center bg-gray-100 rounded-xl p-0.5 h-10"
 						>
 							<button
@@ -357,6 +370,7 @@
 								<span class="hidden sm:inline">{{ __("Invoice") }}</span>
 							</button>
 							<button
+								v-if="settingsStore.allowSalesOrder"
 								type="button"
 								@click="selectDocType('Sales Order')"
 								class="h-full px-2.5 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center gap-1.5"
@@ -381,6 +395,33 @@
 									/>
 								</svg>
 								<span class="hidden sm:inline">{{ __("Order") }}</span>
+							</button>
+							<button
+								v-if="shiftStore.allowQuotation"
+								type="button"
+								@click="selectDocType('Quotation')"
+								class="h-full px-2.5 text-xs font-semibold rounded-lg transition-all duration-200 flex items-center gap-1.5"
+								:class="
+									cartStore.targetDoctype === 'Quotation'
+										? 'bg-white text-purple-600 shadow-sm'
+										: 'text-gray-500 hover:text-gray-700'
+								"
+								:title="__('Quotation')"
+							>
+								<svg
+									class="w-4 h-4"
+									fill="none"
+									stroke="currentColor"
+									viewBox="0 0 24 24"
+								>
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
+									/>
+								</svg>
+								<span class="hidden sm:inline">{{ __("Quote") }}</span>
 							</button>
 						</div>
 					</div>
@@ -1422,7 +1463,7 @@
 							? 'bg-gray-300 cursor-not-allowed'
 							: 'bg-blue-600 hover:bg-blue-700 active:bg-blue-800 shadow-lg hover:shadow-xl active:scale-[0.98]',
 					]"
-					:aria-label="__('Proceed to payment')"
+					:aria-label="isQuotation ? __('Save quotation') : __('Proceed to payment')"
 				>
 					<svg
 						class="w-4 h-4 me-1.5"
@@ -1437,7 +1478,7 @@
 							d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
 						/>
 					</svg>
-					<span>{{ __("Checkout") }}</span>
+					<span>{{ isQuotation ? __("Save Quotation") : __("Checkout") }}</span>
 				</button>
 
 				<!-- Hold Order Button (Secondary - 50% width) -->
@@ -1485,6 +1526,7 @@
  */
 import { usePOSCartStore } from "@/stores/posCart";
 import { usePOSSettingsStore } from "@/stores/posSettings";
+import { usePOSShiftStore } from "@/stores/posShift";
 import { usePOSOffersStore } from "@/stores/posOffers";
 import { useCustomerSearchStore } from "@/stores/customerSearch";
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency";
@@ -1498,6 +1540,7 @@ import { FeatherIcon } from "frappe-ui";
 const log = logger.create("InvoiceCart");
 import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
+import CustomerBalance from "@/components/common/CustomerBalance.vue";
 import EditItemDialog from "./EditItemDialog.vue";
 
 /**
@@ -1507,6 +1550,7 @@ import EditItemDialog from "./EditItemDialog.vue";
  */
 const cartStore = usePOSCartStore(); // Pinia store for cart state management
 const settingsStore = usePOSSettingsStore(); // Pinia store for POS settings
+const shiftStore = usePOSShiftStore(); // Pinia store for POS Profile / shift
 const offersStore = usePOSOffersStore(); // Pinia store for offers/promotions
 const customerSearchStore = useCustomerSearchStore(); // Pinia store for customer search
 const { formatQuantity } = useFormatters(); // Quantity formatting utilities
@@ -1705,51 +1749,6 @@ watch(
 		} else {
 			availableGiftCards.value = [];
 		}
-	}
-);
-
-/**
- * Selected customer's receivable balance (net of returns/advances credit).
- * net_balance > 0 means the customer owes; < 0 means they have credit.
- *
- * @endpoint pos_next.api.credit_sales.get_customer_balance
- */
-const customerBalance = ref(null);
-
-const customerBalanceResource = createResource({
-	url: "pos_next.api.credit_sales.get_customer_balance",
-	makeParams() {
-		return {
-			customer: props.customer?.name || props.customer,
-			company: props.company,
-		};
-	},
-	auto: false,
-	onSuccess(data) {
-		customerBalance.value = data?.message || data || null;
-	},
-	onError(error) {
-		log.error("Error loading customer balance:", error);
-		customerBalance.value = null;
-	},
-});
-
-function loadCustomerBalance() {
-	const customerName = props.customer?.name || props.customer;
-	if (customerName && !isOffline()) {
-		customerBalanceResource.reload();
-	} else {
-		customerBalance.value = null;
-	}
-}
-
-watch(() => props.customer?.name || props.customer, loadCustomerBalance, { immediate: true });
-
-// Cart emptied (invoice submitted or cleared) — balance may have changed
-watch(
-	() => props.items.length,
-	(len, prevLen) => {
-		if (len === 0 && prevLen > 0) loadCustomerBalance();
 	}
 );
 
@@ -2255,6 +2254,9 @@ async function handleUpdateItem(updatedItem) {
 function selectDocType(type) {
 	cartStore.setTargetDoctype(type);
 }
+
+const showDocTypeToggle = computed(() => settingsStore.allowSalesOrder || shiftStore.allowQuotation);
+const isQuotation = computed(() => cartStore.targetDoctype === "Quotation");
 
 /**
  * Handle clicks outside interactive elements.
