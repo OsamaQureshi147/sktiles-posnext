@@ -14,6 +14,50 @@ from frappe import _
 from frappe.utils import cint, flt, get_datetime, nowdate, today
 
 
+def _get_overpaid_invoice_credits(customer, company=None):
+	"""
+	Credit left on regular (non-return) invoices that were overpaid, i.e. POS change
+	added to the customer account: paid - change > invoice total, outstanding < 0.
+
+	Capped at the overpaid amount so negative outstanding caused by a linked return
+	isn't counted here too (that credit is tracked on the return invoice).
+	"""
+	filters = {
+		"customer": customer,
+		"docstatus": 1,
+		"is_return": 0,
+		"outstanding_amount": ["<", 0],
+	}
+	if company:
+		filters["company"] = company
+
+	invoices = frappe.get_all(
+		"Sales Invoice",
+		filters=filters,
+		fields=[
+			"name",
+			"outstanding_amount",
+			"paid_amount",
+			"change_amount",
+			"write_off_amount",
+			"grand_total",
+			"rounded_total",
+			"posting_date",
+			"modified",
+		],
+		order_by="posting_date desc",
+	)
+
+	credits = []
+	for inv in invoices:
+		invoice_total = flt(inv.rounded_total or inv.grand_total)
+		overpaid = flt(inv.paid_amount) - flt(inv.change_amount) + flt(inv.write_off_amount) - invoice_total
+		credit = min(-flt(inv.outstanding_amount), overpaid)
+		if credit > 0:
+			credits.append(frappe._dict(inv, credit=credit))
+	return credits
+
+
 @frappe.whitelist()
 def get_customer_balance(customer, company=None):
 	"""
@@ -23,9 +67,11 @@ def get_customer_balance(customer, company=None):
 	- Regular invoices: Only positive outstanding_amount (what customer owes)
 	- Return invoices: Only negative outstanding_amount (credit added to customer balance)
 
-	Credit ONLY comes from return invoices where "Add to Customer Credit" was selected:
+	Credit comes from return invoices where "Add to Customer Credit" was selected:
 	- Cash refund given: outstanding_amount = 0 → NOT counted as credit
 	- Added to customer credit: outstanding_amount < 0 → counted as credit
+	from overpaid invoices (POS change added to the customer account), and from
+	unallocated customer advances (Payment Entry).
 
 	Note: Negative outstanding on regular invoices (from linked returns) is NOT counted
 	as credit to avoid double-counting - the credit is tracked on the return invoice.
@@ -37,7 +83,7 @@ def get_customer_balance(customer, company=None):
 	Returns:
 		dict: {
 			'total_outstanding': float (positive = customer owes),
-			'total_credit': float (positive = customer has credit from returns),
+			'total_credit': float (positive = customer has credit from returns/advances),
 			'net_balance': float (positive = customer owes, negative = customer has credit)
 		}
 	"""
@@ -85,14 +131,37 @@ def get_customer_balance(customer, company=None):
 			.where(base_filters & (SalesInvoice.is_return == 1) & (SalesInvoice.outstanding_amount < 0))
 		)
 
+		# Unallocated customer advances (e.g. POS change added to customer account)
+		PaymentEntry = DocType("Payment Entry")
+		advance_filters = (
+			(PaymentEntry.party_type == "Customer")
+			& (PaymentEntry.party == customer)
+			& (PaymentEntry.payment_type == "Receive")
+			& (PaymentEntry.docstatus == 1)
+			& (PaymentEntry.unallocated_amount > 0)
+		)
+		if company:
+			advance_filters = advance_filters & (PaymentEntry.company == company)
+		advance_query = (
+			frappe.qb.from_(PaymentEntry)
+			.select(Coalesce(Sum(PaymentEntry.unallocated_amount), 0).as_("advance_credit"))
+			.where(advance_filters)
+		)
+
 		# Execute queries
 		regular_result = regular_query.run(as_dict=True)
 		return_result = return_query.run(as_dict=True)
+		advance_result = advance_query.run(as_dict=True)
 
 		# Calculate totals
 		total_outstanding = flt(regular_result[0].total_outstanding) if regular_result else 0.0
-		# Credit only comes from return invoices where no cash refund was given
-		total_credit = flt(return_result[0].return_credit) if return_result else 0.0
+		# Credit comes from return invoices where no cash refund was given,
+		# plus unallocated advances (same sources as get_available_credit)
+		total_credit = (
+			(flt(return_result[0].return_credit) if return_result else 0.0)
+			+ (flt(advance_result[0].advance_credit) if advance_result else 0.0)
+			+ sum(row["credit"] for row in _get_overpaid_invoice_credits(customer, company))
+		)
 
 		# Net balance: positive = owes, negative = has credit
 		net_balance = total_outstanding - total_credit
@@ -195,6 +264,22 @@ def get_available_credit(customer, company, pos_profile=None):
 					"modified": row.modified,  # For optimistic locking
 				}
 			)
+
+	# Overpaid invoices: POS change added to the customer account
+	for row in _get_overpaid_invoice_credits(customer, company):
+		total_credit.append(
+			{
+				"type": "Invoice",
+				"credit_origin": row.name,
+				"total_credit": row.credit,
+				"available_credit": row.credit,
+				"source_type": "Overpaid Invoice",
+				"posting_date": row.posting_date,
+				"reference_amount": row.grand_total,
+				"credit_to_redeem": 0,  # User will set this
+				"modified": row.modified,  # For optimistic locking
+			}
+		)
 
 	# Get unallocated advance payments
 	advances = frappe.get_all(

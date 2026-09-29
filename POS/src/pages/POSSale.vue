@@ -492,6 +492,7 @@
 				:allow-write-off="posSettingsStore.allowWriteOffChange"
 				:write-off-limit="shiftStore.writeOffLimit"
 				:customer="cartStore.customer"
+				:default-customer="shiftStore.profileCustomer || ''"
 				:company="shiftStore.profileCompany"
 				:additional-discount="cartStore.additionalDiscount"
 				:items="cartStore.invoiceItems"
@@ -2130,6 +2131,7 @@ async function handlePaymentCompleted(paymentData) {
 				change_amount: paymentData.change_amount || 0,
 				is_credit_sale: paymentData.is_credit_sale ? 1 : 0,
 				receivable_account: paymentData.receivable_account || null,
+				excess_to_customer_account: paymentData.excess_to_customer_account ? 1 : 0,
 				edited_from: editingOfflineContext?.originalOfflineId || null,
 			};
 
@@ -2225,6 +2227,7 @@ async function handlePaymentCompleted(paymentData) {
 			const result = await cartStore.submitInvoice({
 				isCreditSale: Boolean(paymentData.is_credit_sale),
 				receivableAccount: paymentData.receivable_account || null,
+				excessToCustomerAccount: Boolean(paymentData.excess_to_customer_account),
 			});
 
 			if (result) {

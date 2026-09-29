@@ -884,6 +884,12 @@
 									>
 										{{ formatCurrency(remainingAmount) }}
 									</div>
+									<div
+										v-if="isWalkIn && (allowPartialPayment || allowCreditSale)"
+										class="text-[10px] text-orange-500 mt-1"
+									>
+										{{ __("Select a customer to leave a balance") }}
+									</div>
 								</div>
 								<!-- Write-off Applied -->
 								<div
@@ -917,7 +923,11 @@
 									<div
 										class="text-xs font-medium text-green-600 uppercase tracking-wide mb-1"
 									>
-										{{ __("Change Due") }}
+										{{
+											addChangeToAccount && canAddChangeToAccount
+												? __("To Customer Account")
+												: __("Change Due")
+										}}
 									</div>
 									<div
 										:class="[
@@ -969,6 +979,84 @@
 										:class="['font-bold text-green-600', dynamicTextSize.body]"
 										>{{ __("Fully Paid") }}</span
 									>
+								</div>
+							</div>
+						</div>
+
+						<!-- Add Change to Customer Account Toggle (not for walk-in customers) -->
+						<div
+							v-if="canAddChangeToAccount"
+							class="border-t border-gray-200 px-4 py-3 bg-white"
+						>
+							<div class="flex items-center justify-between mb-1.5">
+								<span
+									class="text-xs font-medium text-gray-500 uppercase tracking-wider"
+									>{{ __("Add Change to Customer Account") }}</span
+								>
+							</div>
+							<div
+								class="relative h-12 rounded-lg overflow-hidden select-none cursor-pointer border"
+								:class="
+									addChangeToAccount
+										? 'bg-emerald-500 border-emerald-500'
+										: 'bg-gray-100 border-gray-200'
+								"
+								role="switch"
+								:aria-checked="addChangeToAccount"
+								@click="addChangeToAccount = !addChangeToAccount"
+								style="transition: all 0.25s ease"
+							>
+								<div
+									class="absolute inset-0 flex items-center justify-center z-10 px-14"
+								>
+									<span
+										class="text-sm font-semibold tracking-wide truncate"
+										:class="addChangeToAccount ? 'text-white' : 'text-gray-700'"
+									>
+										{{
+											addChangeToAccount
+												? __("{0} credited to {1}", [
+														formatCurrency(changeAmount),
+														customerDisplayName,
+												  ])
+												: __("Give {0} as change", [formatCurrency(changeAmount)])
+										}}
+									</span>
+								</div>
+								<div
+									class="absolute top-1.5 bottom-1.5 w-11 rounded-md flex items-center justify-center z-20 bg-white border border-gray-200"
+									:style="{
+										left: addChangeToAccount ? 'calc(100% - 3rem)' : '0.375rem',
+										transition: 'left 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+										boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+									}"
+								>
+									<svg
+										v-if="addChangeToAccount"
+										class="w-5 h-5 text-emerald-500"
+										fill="currentColor"
+										viewBox="0 0 20 20"
+									>
+										<path
+											fill-rule="evenodd"
+											d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+									<svg
+										v-else
+										class="w-5 h-5 text-gray-400"
+										fill="none"
+										stroke="currentColor"
+										viewBox="0 0 24 24"
+									>
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M9 5l7 7-7 7"
+										/>
+									</svg>
 								</div>
 							</div>
 						</div>
@@ -1232,7 +1320,7 @@
 							<!-- Receivable Accounts: pick the account that holds the unpaid balance
 							     (the invoice's debit_to). Tender cash for the paid part; the rest
 							     stays outstanding on this account. -->
-							<template v-if="receivableAccounts.length > 0">
+							<template v-if="receivableAccounts.length > 0 && canCreditSale">
 								<!-- Divider: a full-width line forces a wrap, then the AR accounts -->
 								<div class="w-full border-t border-gray-200 my-0.5"></div>
 								<button
@@ -1511,7 +1599,7 @@
 								v-if="
 									lastSelectedMethod &&
 									remainingAmount > 0 &&
-									allowCreditSale &&
+									canCreditSale &&
 									paymentEntries.length === 0
 								"
 								class="grid grid-cols-2"
@@ -1843,9 +1931,9 @@
 							isCompactMode ? 'mt-2' : 'mt-4',
 						]"
 					>
-						<!-- Pay on Account Button (if credit sales enabled) -->
+						<!-- Pay on Account Button (if credit sales enabled, not for walk-in) -->
 						<button
-							v-if="allowCreditSale"
+							v-if="canCreditSale"
 							@click="addCreditAccountPayment"
 							:disabled="paymentEntries.length > 0 || isSubmitting"
 							:class="[
@@ -2055,6 +2143,11 @@ const props = defineProps({
 	customer: {
 		type: [String, Object],
 		default: null,
+	},
+	// POS Profile default (walk-in) customer; change can't go to their account
+	defaultCustomer: {
+		type: String,
+		default: "",
 	},
 	items: {
 		type: Array,
@@ -2697,6 +2790,29 @@ const canWriteOff = computed(() => {
 // State to track if user wants to write off
 const applyWriteOff = ref(false);
 
+// "Add change to customer account": overpayment becomes customer credit instead of change
+const addChangeToAccount = ref(false);
+
+function isWalkInCustomer(customer) {
+	const name = customer?.name || customer || "";
+	if (!name || name === props.defaultCustomer) return true;
+	const label = `${name} ${customer?.customer_name || ""}`.toLowerCase().replace(/[^a-z0-9 ]/g, "");
+	return label.includes("walk in") || label.includes("walkin");
+}
+
+// Walk-in customers must pay in full: no partial payment / pay on account / receivable account
+const isWalkIn = computed(() => isWalkInCustomer(props.customer));
+const canPartialPay = computed(() => props.allowPartialPayment && !isWalkIn.value);
+const canCreditSale = computed(() => props.allowCreditSale && !isWalkIn.value);
+
+watch(isWalkIn, (walkIn) => {
+	if (walkIn) selectedReceivableAccount.value = "";
+});
+
+const customerDisplayName = computed(
+	() => props.customer?.customer_name || props.customer?.name || props.customer || ""
+);
+
 // Slide track ref for write-off slider
 const slideTrack = ref(null);
 
@@ -2835,6 +2951,14 @@ const allowsOverpayment = computed(() => {
 	return false;
 });
 
+const canAddChangeToAccount = computed(
+	() =>
+		changeAmount.value > 0 &&
+		allowsOverpayment.value &&
+		!isSalesOrder.value &&
+		!isWalkInCustomer(props.customer)
+);
+
 // Check if current payment is valid according to exact amount rules
 const isExactAmountValid = computed(() => {
 	if (!isExactAmountModeActive.value) return true;
@@ -2861,12 +2985,12 @@ const canComplete = computed(() => {
 	}
 
 	// "Pay on Receivable Account": the chosen account holds the unpaid balance
-	if (selectedReceivableAccount.value && props.allowCreditSale) {
+	if (selectedReceivableAccount.value && canCreditSale.value) {
 		return totalPaid.value <= roundCurrency(props.grandTotal) + 0.01;
 	}
 
 	// If partial payment is allowed, can complete with any amount > 0
-	if (props.allowPartialPayment) {
+	if (canPartialPay.value) {
 		return totalPaid.value > 0 && paymentEntries.value.length > 0;
 	}
 
@@ -2884,7 +3008,7 @@ const paymentButtonText = computed(() => {
 	if (remainingAmount.value === 0 || (applyWriteOff.value && canWriteOff.value)) {
 		return __("Complete Payment");
 	}
-	if (props.allowPartialPayment && totalPaid.value > 0) {
+	if (canPartialPay.value && totalPaid.value > 0) {
 		return __("Partial Payment");
 	}
 	return __("Complete Payment");
@@ -2971,6 +3095,7 @@ watch(show, (newVal) => {
 		selectedSalesPersons.value = [];
 		salesPersonSearch.value = "";
 		applyWriteOff.value = false; // Reset write-off state
+		addChangeToAccount.value = false;
 		// Set default delivery date to today for Sales Orders
 		deliveryDate.value = isSalesOrder.value ? today : "";
 
@@ -3398,9 +3523,14 @@ function completePayment() {
 	const isPartial = effectivePaid < props.grandTotal;
 	const outstanding = isPartial ? roundCurrency(props.grandTotal - effectivePaid) : 0;
 
+	const changeToAccount = addChangeToAccount.value && canAddChangeToAccount.value;
+
 	const paymentData = {
 		payments: paymentEntries.value,
-		change_amount: changeAmount.value,
+		change_amount: changeToAccount ? 0 : changeAmount.value,
+		// Overpayment credited to the customer (kept as negative outstanding on the invoice)
+		excess_to_customer_account: changeToAccount,
+		customer_credit: changeToAccount ? changeAmount.value : 0,
 		is_partial_payment: isPartial,
 		paid_amount: totalPaid.value,
 		outstanding_amount: outstanding,

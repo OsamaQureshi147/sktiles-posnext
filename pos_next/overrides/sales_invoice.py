@@ -95,6 +95,25 @@ class CustomSalesInvoice(SalesInvoice):
 	for wallet payment methods marked with is_wallet_payment.
 	"""
 
+	def calculate_taxes_and_totals(self):
+		"""
+		"Add change to customer account" (POS): ERPNext turns any cash overpayment into
+		change_amount. When the cashier credits it to the customer instead, keep the
+		full amount received as paid, give no change, and leave the excess as negative
+		outstanding on this invoice (customer credit, redeemable on later sales).
+		"""
+		super().calculate_taxes_and_totals()
+
+		if not self.flags.get("pos_next_excess_to_customer_account") or not flt(self.change_amount):
+			return
+
+		self.outstanding_amount = flt(
+			flt(self.outstanding_amount) - flt(self.change_amount),
+			self.precision("outstanding_amount"),
+		)
+		self.change_amount = 0
+		self.base_change_amount = 0
+
 	def make_pos_gl_entries(self, gl_entries):
 		"""
 		Override to add party information for wallet payment accounts.

@@ -967,7 +967,8 @@ export function useInvoice() {
 		deliveryDate = null,
 		writeOffAmount = 0,
 		isCreditSale = false,
-		receivableAccount = null
+		receivableAccount = null,
+		excessToCustomerAccount = false
 	) {
 		/**
 		 * Two-step submission process with mutex protection:
@@ -982,6 +983,7 @@ export function useInvoice() {
 		 * @param {string} targetDoctype - The document type to create (Sales Invoice or Sales Order)
 		 * @param {string|null} deliveryDate - Delivery date for Sales Orders
 		 * @param {number} writeOffAmount - Amount to write off (small remaining balances)
+		 * @param {boolean} excessToCustomerAccount - Credit overpayment to the customer instead of change
 		 */
 		return await submitMutex.withLock(async () => {
 			// Check if already submitting (belt and suspenders with mutex)
@@ -1055,6 +1057,10 @@ export function useInvoice() {
 				}
 				if (isCreditSale && invoicePayments.length === 0) {
 					submitData.is_credit_sale = 1;
+				}
+				if (excessToCustomerAccount) {
+					submitData.excess_to_customer_account = 1;
+					submitData.change_amount = 0;
 				}
 
 				try {

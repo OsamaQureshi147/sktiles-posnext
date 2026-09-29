@@ -388,6 +388,39 @@ def _validate_receivable_account(account, company, pos_profile):
 		frappe.throw(_("Credit sales are not enabled for this POS Profile."))
 
 
+def _is_walk_in_customer(customer, pos_profile=None):
+	"""Walk-in = the POS Profile's default customer, or a customer named like "Walk In Customer"."""
+	if not customer:
+		return True
+	if pos_profile and customer == frappe.db.get_value("POS Profile", pos_profile, "customer"):
+		return True
+	customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
+	normalized = "".join(ch for ch in f"{customer} {customer_name}".lower() if ch.isalnum() or ch == " ")
+	return "walk in" in normalized or "walkin" in normalized
+
+
+def _validate_walk_in_fully_paid(invoice_doc, pos_profile):
+	"""Block leaving an unpaid balance (customer debt) on a walk-in customer."""
+	if not _is_walk_in_customer(invoice_doc.customer, pos_profile):
+		return
+
+	invoice_doc.calculate_taxes_and_totals()
+	if flt(invoice_doc.outstanding_amount) > 1.0 / (10.0 ** invoice_doc.precision("outstanding_amount")):
+		frappe.throw(
+			_(
+				"Walk-in customers must pay the full amount. Select a customer to leave an unpaid balance of {0}."
+			).format(frappe.format_value(invoice_doc.outstanding_amount, {"fieldtype": "Currency"}))
+		)
+
+def _validate_excess_to_customer_account(invoice_doc, pos_profile):
+	"""Guard "add change to customer account": named customer, single currency."""
+	if _is_walk_in_customer(invoice_doc.customer, pos_profile):
+		frappe.throw(_("Change can't be added to the account of a walk-in customer."))
+
+	company_currency = frappe.get_cached_value("Company", invoice_doc.company, "default_currency")
+	if invoice_doc.currency and invoice_doc.currency != company_currency:
+		frappe.throw(_("Adding change to the customer account is not supported for multi-currency invoices."))
+
 def _set_payment_accounts(payments, company):
 	"""Set the account for each payment entry that is missing one.
 
@@ -1456,6 +1489,22 @@ def submit_invoice(invoice=None, data=None):
 				frappe.throw(_("Credit sales are not enabled for this POS Profile."))
 			invoice_doc.flags.pos_next_credit_sale = 1
 
+		# "Add change to customer account": no change is given; the full amount received
+		# stays on the invoice, so its outstanding goes negative (customer credit) and the
+		# customer ledger shows one voucher: debit = invoice total, credit = amount paid.
+		# See CustomSalesInvoice.calculate_taxes_and_totals.
+		excess_to_customer_account = cint(
+			data.get("excess_to_customer_account") or invoice.get("excess_to_customer_account")
+		)
+		if excess_to_customer_account and doctype == DOCTYPE_SALES_INVOICE and not invoice_doc.get("is_return"):
+			_validate_excess_to_customer_account(invoice_doc, pos_profile)
+			invoice_doc.flags.pos_next_excess_to_customer_account = True
+
+		# Walk-in customers must pay in full: no partial payment, pay on account
+		# or receivable-account balance (the debt would sit on a shared account)
+		if doctype == DOCTYPE_SALES_INVOICE and not invoice_doc.get("is_return"):
+			_validate_walk_in_fully_paid(invoice_doc, pos_profile)
+
 		# Save before submit
 		invoice_doc.flags.ignore_permissions = True
 		frappe.flags.ignore_account_permission = True
@@ -1573,6 +1622,10 @@ def submit_invoice(invoice=None, data=None):
 			"outstanding_amount": getattr(invoice_doc, "outstanding_amount", 0),
 			"paid_amount": getattr(invoice_doc, "paid_amount", 0),
 			"change_amount": getattr(invoice_doc, "change_amount", 0),
+			# Change credited to the customer account (negative outstanding)
+			"customer_credit": max(0, -flt(getattr(invoice_doc, "outstanding_amount", 0)))
+			if excess_to_customer_account
+			else 0,
 		}
 
 		# Include offline_id in response for client-side tracking
