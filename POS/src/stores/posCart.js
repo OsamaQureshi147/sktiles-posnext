@@ -184,7 +184,10 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			// Account for quantity already in the cart for this item
 			const itemUom = item.uom || item.stock_uom;
 			const existing = invoiceItems.value.find(
-				(i) => i.item_code === item.item_code && i.uom === itemUom
+				(i) =>
+					i.item_code === item.item_code &&
+					i.uom === itemUom &&
+					(!item.warehouse || !i.warehouse || i.warehouse === item.warehouse)
 			);
 			const totalQty = (existing ? existing.quantity : 0) + qty;
 			const warehouse = item.warehouse || currentProfile.warehouse;
@@ -203,12 +206,10 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * Wraps useInvoice.updateItemQuantity to enforce stock limits
 	 * when the user clicks +/- or types a new quantity.
 	 */
-	function updateItemQuantity(itemCode, quantity, uom = null) {
-		const item = uom
-			? invoiceItems.value.find((i) => i.item_code === itemCode && i.uom === uom)
-			: invoiceItems.value.find((i) => i.item_code === itemCode);
+	function updateItemQuantity(itemCode, quantity, uom = null, warehouse = null) {
+		const item = findCartItem(itemCode, uom, warehouse);
 
-		if (!item) return baseUpdateItemQuantity(itemCode, quantity, uom);
+		if (!item) return baseUpdateItemQuantity(itemCode, quantity, uom, warehouse);
 
 		const newQty = Number.parseFloat(quantity) || 1;
 
@@ -225,7 +226,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
-		baseUpdateItemQuantity(itemCode, quantity, uom);
+		baseUpdateItemQuantity(itemCode, quantity, uom, warehouse);
 	}
 
 	function clearCart() {
@@ -1242,11 +1243,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * Find a cart item by item_code and optionally by UOM
 	 * @param {string} itemCode - Item code to find
 	 * @param {string|null} uom - Optional UOM to match
+	 * @param {string|null} warehouse - Optional warehouse to match (same item from several warehouses)
 	 * @returns {Object|undefined} Cart item or undefined
 	 */
-	function findCartItem(itemCode, uom = null) {
+	function findCartItem(itemCode, uom = null, warehouse = null) {
 		return invoiceItems.value.find(
-			(item) => item.item_code === itemCode && (!uom || item.uom === uom)
+			(item) =>
+				item.item_code === itemCode &&
+				(!uom || item.uom === uom) &&
+				(!warehouse || !item.warehouse || item.warehouse === warehouse)
 		);
 	}
 
@@ -1255,11 +1260,16 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {string} itemCode - Item code
 	 * @param {string} targetUom - Target UOM to find
 	 * @param {Object} excludeItem - Item to exclude from search
+	 * @param {string|null} warehouse - Only merge lines from the same warehouse
 	 * @returns {Object|undefined} Existing item or undefined
 	 */
-	function findItemWithUom(itemCode, targetUom, excludeItem = null) {
+	function findItemWithUom(itemCode, targetUom, excludeItem = null, warehouse = null) {
 		return invoiceItems.value.find(
-			(item) => item.item_code === itemCode && item.uom === targetUom && item !== excludeItem
+			(item) =>
+				item.item_code === itemCode &&
+				item.uom === targetUom &&
+				item !== excludeItem &&
+				(!warehouse || !item.warehouse || item.warehouse === warehouse)
 		);
 	}
 
@@ -1311,14 +1321,15 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {string} itemCode - Item code
 	 * @param {string} newUom - New UOM to change to
 	 * @param {string|null} currentUom - Current UOM (required when same item has multiple UOMs)
+	 * @param {string|null} warehouse - Line warehouse (required when same item is in several warehouses)
 	 */
-	async function changeItemUOM(itemCode, newUom, currentUom = null) {
+	async function changeItemUOM(itemCode, newUom, currentUom = null, warehouse = null) {
 		try {
-			const cartItem = findCartItem(itemCode, currentUom);
+			const cartItem = findCartItem(itemCode, currentUom, warehouse);
 			if (!cartItem || cartItem.uom === newUom) return;
 
 			// Check for existing item to merge with
-			const existingItem = findItemWithUom(itemCode, newUom, cartItem);
+			const existingItem = findItemWithUom(itemCode, newUom, cartItem, cartItem.warehouse);
 			if (existingItem) {
 				const totalQty = mergeItems(cartItem, existingItem, cartItem.quantity);
 				showSuccess(__("Merged into {0} (Total: {1})", [newUom, totalQty]));
@@ -1341,17 +1352,32 @@ export const usePOSCartStore = defineStore("posCart", () => {
 	 * @param {string} itemCode - Item code
 	 * @param {Object} updates - Updated details
 	 * @param {string|null} currentUom - Current UOM (required when same item has multiple UOMs)
+	 * @param {string|null} currentWarehouse - Current line warehouse (required when same item is in several warehouses)
 	 */
-	async function updateItemDetails(itemCode, updates, currentUom = null) {
+	async function updateItemDetails(itemCode, updates, currentUom = null, currentWarehouse = null) {
 		try {
-			const cartItem = findCartItem(itemCode, currentUom);
+			const cartItem = findCartItem(itemCode, currentUom, currentWarehouse);
 			if (!cartItem) {
 				throw new Error("Item not found in cart");
 			}
 
+			const targetWarehouse = updates.warehouse || cartItem.warehouse;
+			const targetUom = updates.uom || cartItem.uom;
+
+			// Moving the line to a warehouse that already has this item/UOM: merge into that line
+			if (targetWarehouse !== cartItem.warehouse) {
+				const sameLine = findItemWithUom(itemCode, targetUom, cartItem, targetWarehouse);
+				if (sameLine && sameLine.warehouse === targetWarehouse) {
+					const qtyToMerge = updates.quantity ?? cartItem.quantity;
+					const totalQty = mergeItems(cartItem, sameLine, qtyToMerge);
+					showSuccess(__("Merged into {0} (Total: {1})", [targetWarehouse, totalQty]));
+					return true;
+				}
+			}
+
 			// Handle UOM change with potential merge
 			if (updates.uom && updates.uom !== cartItem.uom) {
-				const existingItem = findItemWithUom(itemCode, updates.uom, cartItem);
+				const existingItem = findItemWithUom(itemCode, updates.uom, cartItem, targetWarehouse);
 				if (existingItem) {
 					const qtyToMerge = updates.quantity ?? cartItem.quantity;
 					const totalQty = mergeItems(cartItem, existingItem, qtyToMerge);

@@ -368,9 +368,11 @@
 								:currency="shiftStore.profileCurrency"
 								:applied-offers="cartStore.appliedOffers"
 								:warehouses="profileWarehouses"
+								:default-warehouse="shiftStore.profileWarehouse"
 								@update-quantity="cartStore.updateItemQuantity"
 								@remove-item="
-									(itemCode, uom) => cartStore.removeItem(itemCode, uom)
+									(itemCode, uom, warehouse) =>
+										cartStore.removeItem(itemCode, uom, warehouse)
 								"
 								@select-customer="handleCustomerSelected"
 								@create-customer="handleCreateCustomer"
@@ -388,8 +390,6 @@
 											offersDialogRef.value
 										)
 								"
-								@update-uom="cartStore.changeItemUOM"
-								@edit-item="handleEditItem"
 								@view-shift="uiStore.showOpenShiftDialog = true"
 								@show-drafts="openDraftDialog"
 								@show-history="openHistoryDialog"
@@ -587,9 +587,20 @@
 				v-model="uiStore.showBatchSerialDialog"
 				:item="cartStore.pendingItem"
 				:quantity="cartStore.pendingItemQty"
-				:warehouse="shiftStore.profileWarehouse"
+				:warehouse="cartStore.pendingItem?.warehouse || shiftStore.profileWarehouse"
 				:pos-profile="cartStore.posProfile"
 				@batch-serial-selected="handleBatchSerialSelected"
+			/>
+
+			<!-- Warehouse Picker (item has stock in more than one warehouse) -->
+			<WarehousePickerDialog
+				v-model="showWarehousePicker"
+				:item="warehousePickerItem"
+				:company="shiftStore.profileCompany"
+				:default-warehouse="shiftStore.profileWarehouse"
+				:warehouses="profileWarehouses"
+				:enforce-stock="settingsStore.shouldEnforceStockValidation()"
+				@warehouse-selected="handleWarehouseSelected"
 			/>
 
 			<!-- Generic Item Selection Dialog -->
@@ -1010,6 +1021,7 @@ import DraftInvoicesDialog from "@/components/sale/DraftInvoicesDialog.vue";
 import InvoiceCart from "@/components/sale/InvoiceCart.vue";
 import InvoiceHistoryDialog from "@/components/sale/InvoiceHistoryDialog.vue";
 import ItemSelectionDialog from "@/components/sale/ItemSelectionDialog.vue";
+import WarehousePickerDialog from "@/components/sale/WarehousePickerDialog.vue";
 import ItemsSelector from "@/components/sale/ItemsSelector.vue";
 import OffersDialog from "@/components/sale/OffersDialog.vue";
 import OfflineInvoicesDialog from "@/components/sale/OfflineInvoicesDialog.vue";
@@ -1232,6 +1244,9 @@ onMounted(async () => {
 
 	// Set up real-time stock update listener
 	const cleanup = onStockUpdate(async (stockUpdates) => {
+		// All-warehouse totals change on a sale from any warehouse
+		stockStore.updateTotals(stockUpdates);
+
 		// Filter updates to only include items from our warehouse(s)
 		const profileWarehouses = shiftStore.profileWarehouse
 			? [shiftStore.profileWarehouse]
@@ -1871,6 +1886,13 @@ function handleItemSelected(item, autoAdd = false) {
 		return;
 	}
 
+	// Item stocked in other warehouses too: let the cashier pick the warehouse first
+	if (shouldPickWarehouse(item)) {
+		warehousePickerItem.value = item;
+		showWarehousePicker.value = true;
+		return;
+	}
+
 	// Early out-of-stock guard — prevent opening dialogs for zero-stock items
 	// Full qty validation happens in cartStore.addItem()
 	if (
@@ -1925,8 +1947,42 @@ function handleItemSelected(item, autoAdd = false) {
 	}
 }
 
-async function handleEditItem(updatedItem) {
-	await cartStore.updateItemDetails(updatedItem.item_code, updatedItem);
+// Warehouse picker state
+const showWarehousePicker = ref(false);
+const warehousePickerItem = ref(null);
+
+/**
+ * Whether to ask which warehouse to sell from: the item has stock outside the
+ * POS profile warehouse (total_qty > local qty). Needs the server, so skipped offline.
+ */
+function shouldPickWarehouse(item) {
+	if (item.warehouse_picked || item.has_variants || item.is_bundle || !item.is_stock_item) {
+		return false;
+	}
+	if (offlineStore.isOffline || item.total_qty === undefined || item.total_qty === null) {
+		return false;
+	}
+	return item.total_qty - (item.actual_qty ?? item.stock_qty ?? 0) > 0;
+}
+
+function handleWarehouseSelected({ warehouse, actual_qty }) {
+	const item = warehousePickerItem.value;
+	warehousePickerItem.value = null;
+	if (!item) return;
+
+	// POS warehouse keeps the live (cart-aware) stock; other warehouses use their server stock
+	const pickedItem =
+		warehouse === (item.warehouse || shiftStore.profileWarehouse)
+			? { ...item, warehouse_picked: true }
+			: {
+					...item,
+					warehouse,
+					actual_qty,
+					stock_qty: actual_qty,
+					warehouse_picked: true,
+			  };
+
+	handleItemSelected(pickedItem);
 }
 
 function handleAdditionalDiscountUpdate(discountAmount) {

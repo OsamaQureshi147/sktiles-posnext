@@ -916,6 +916,8 @@
 						item.item_code +
 						'-' +
 						(item.uom || '') +
+						'-' +
+						(item.warehouse || '') +
 						(item.is_free_item ? '-free' : '')
 					"
 					@click="item.is_free_item ? null : openEditDialog(item)"
@@ -967,6 +969,14 @@
 									>
 										{{ item.item_name }}
 									</h4>
+									<!-- Warehouse Badge (line picked from a non-default warehouse) -->
+									<span
+										v-if="isOtherWarehouse(item)"
+										class="inline-flex items-center px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded-full text-[9px] font-bold border border-purple-200 truncate max-w-[45%]"
+										:title="__('Warehouse: {0}', [getWarehouseLabel(item.warehouse)])"
+									>
+										{{ getWarehouseLabel(item.warehouse) }}
+									</span>
 									<!-- Free Item Badge -->
 									<span
 										v-if="item.free_qty && item.free_qty > 0"
@@ -1020,7 +1030,7 @@
 								<button
 									v-if="!item.is_free_item"
 									type="button"
-									@click.stop="$emit('remove-item', item.item_code, item.uom)"
+									@click.stop="$emit('remove-item', item.item_code, item.uom, item.warehouse)"
 									class="text-gray-400 hover:text-red-600 active:text-red-700 transition-colors flex-shrink-0 p-0.5 -m-0.5 touch-manipulation active:scale-90"
 									:aria-label="__('Remove {0}', [item.item_name])"
 									:title="__('Remove item')"
@@ -1184,7 +1194,7 @@
 									<div class="relative group/uom" @click.stop>
 										<button
 											type="button"
-											@click="toggleUomDropdown(item.item_code, item.uom)"
+											@click="toggleUomDropdown(item)"
 											:disabled="
 												item.is_resolved_barcode ||
 												!item.item_uoms ||
@@ -1215,7 +1225,7 @@
 										<svg
 											:class="[
 												'absolute end-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 pointer-events-none transition-transform',
-												openUomDropdown === `${item.item_code}-${item.uom}`
+												openUomDropdown === getUomDropdownKey(item)
 													? 'rotate-180'
 													: '',
 												item.is_resolved_barcode
@@ -1237,8 +1247,7 @@
 										</svg>
 										<div
 											v-if="
-												openUomDropdown ===
-													`${item.item_code}-${item.uom}` &&
+												openUomDropdown === getUomDropdownKey(item) &&
 												item.item_uoms &&
 												item.item_uoms.length > 0
 											"
@@ -1535,6 +1544,11 @@ const props = defineProps({
 		type: Array,
 		default: () => [],
 	},
+	// POS profile warehouse; lines from any other warehouse get a badge
+	defaultWarehouse: {
+		type: String,
+		default: "",
+	},
 });
 
 /**
@@ -1544,8 +1558,8 @@ const props = defineProps({
  * Events emitted to parent component for cart operations
  */
 const emit = defineEmits([
-	"update-quantity", // (itemCode, newQty, uom?) - Update item quantity
-	"remove-item", // (itemCode, uom?) - Remove item from cart
+	"update-quantity", // (itemCode, newQty, uom?, warehouse?) - Update item quantity
+	"remove-item", // (itemCode, uom?, warehouse?) - Remove item from cart
 	"select-customer", // (customer) - Select/change customer
 	"edit-customer", // (customer) - Open edit customer dialog
 	"create-customer", // (searchText) - Open create customer dialog
@@ -2016,7 +2030,7 @@ function incrementQuantity(item) {
 
 	const step = getSmartStep(item.quantity);
 	const newQty = Math.round((item.quantity + step) * 10000) / 10000;
-	emit("update-quantity", item.item_code, newQty, item.uom);
+	emit("update-quantity", item.item_code, newQty, item.uom, item.warehouse);
 }
 
 /**
@@ -2034,9 +2048,9 @@ function decrementQuantity(item) {
 
 	if (newQty <= 0) {
 		// If quantity would be 0 or negative, remove the item
-		emit("remove-item", item.item_code, item.uom);
+		emit("remove-item", item.item_code, item.uom, item.warehouse);
 	} else {
-		emit("update-quantity", item.item_code, newQty, item.uom);
+		emit("update-quantity", item.item_code, newQty, item.uom, item.warehouse);
 	}
 }
 
@@ -2058,10 +2072,10 @@ function updateQuantity(item, value) {
 	if (isNaN(qty)) return;
 
 	// If quantity is zero or negative, remove the item from the cart
-	if (qty <= 0) return emit("remove-item", item.item_code, item.uom);
+	if (qty <= 0) return emit("remove-item", item.item_code, item.uom, item.warehouse);
 
 	// For positive numbers, update quantity immediately (no rounding here while typing)
-	emit("update-quantity", item.item_code, qty, item.uom);
+	emit("update-quantity", item.item_code, qty, item.uom, item.warehouse);
 }
 
 /**
@@ -2076,12 +2090,12 @@ function handleQuantityBlur(item) {
 	// When user leaves the input field, round and validate
 	if (!item.quantity || item.quantity <= 0) {
 		// If quantity is 0 or invalid, remove the item
-		emit("remove-item", item.item_code, item.uom);
+		emit("remove-item", item.item_code, item.uom, item.warehouse);
 	} else {
 		// Round to 4 decimal places for consistency
 		const roundedQty = Math.round(item.quantity * 10000) / 10000;
 		if (roundedQty !== item.quantity) {
-			emit("update-quantity", item.item_code, roundedQty, item.uom);
+			emit("update-quantity", item.item_code, roundedQty, item.uom, item.warehouse);
 		}
 	}
 }
@@ -2091,12 +2105,27 @@ function handleQuantityBlur(item) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Toggle UOM dropdown visibility for an item.
- * Uses unique key combining item_code + uom to handle same item with different UOMs.
+ * Unique key per cart line: same item can appear with different UOMs / warehouses.
  */
-function toggleUomDropdown(itemCode, uom) {
-	const key = `${itemCode}-${uom}`;
+function getUomDropdownKey(item) {
+	return `${item.item_code}-${item.uom}-${item.warehouse || ""}`;
+}
+
+/**
+ * Toggle UOM dropdown visibility for an item.
+ */
+function toggleUomDropdown(item) {
+	const key = getUomDropdownKey(item);
 	openUomDropdown.value = openUomDropdown.value === key ? null : key;
+}
+
+function isOtherWarehouse(item) {
+	return !!(props.defaultWarehouse && item.warehouse && item.warehouse !== props.defaultWarehouse);
+}
+
+function getWarehouseLabel(warehouse) {
+	const match = props.warehouses.find((w) => w.name === warehouse);
+	return match?.warehouse || warehouse;
 }
 
 /**
@@ -2110,7 +2139,7 @@ async function selectUom(item, newUom) {
 	}
 
 	const currentUom = item.uom || item.stock_uom;
-	await cartStore.changeItemUOM(item.item_code, newUom, currentUom);
+	await cartStore.changeItemUOM(item.item_code, newUom, currentUom, item.warehouse);
 	openUomDropdown.value = null;
 	emit("update-uom", item.item_code, newUom);
 }
@@ -2140,8 +2169,14 @@ function openEditDialog(item) {
 async function handleUpdateItem(updatedItem) {
 	// Get the original UOM from selectedItem (before any changes)
 	const originalUom = selectedItem.value?.uom || selectedItem.value?.stock_uom;
-	// Use store method to update item, passing original UOM to identify correct item
-	await cartStore.updateItemDetails(updatedItem.item_code, updatedItem, originalUom);
+	const originalWarehouse = selectedItem.value?.warehouse || null;
+	// Use store method to update item, passing original UOM/warehouse to identify correct line
+	await cartStore.updateItemDetails(
+		updatedItem.item_code,
+		updatedItem,
+		originalUom,
+		originalWarehouse
+	);
 	// Also emit for parent component compatibility
 	emit("edit-item", updatedItem);
 }

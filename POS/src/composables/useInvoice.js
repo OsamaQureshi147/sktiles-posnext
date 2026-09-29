@@ -214,11 +214,24 @@ export function useInvoice() {
 		);
 	});
 
+	/**
+	 * Whether a cart line matches item_code (+ optional uom / warehouse).
+	 * The same item picked from different warehouses lives on separate lines;
+	 * a missing warehouse on either side matches any line (legacy callers).
+	 */
+	function isCartLine(line, itemCode, uom = null, warehouse = null) {
+		return (
+			line.item_code === itemCode &&
+			(!uom || line.uom === uom) &&
+			(!warehouse || !line.warehouse || line.warehouse === warehouse)
+		);
+	}
+
 	// Actions
 	function addItem(item, quantity = 1) {
 		const itemUom = item.uom || item.stock_uom;
-		const existingItem = invoiceItems.value.find(
-			(i) => i.item_code === item.item_code && i.uom === itemUom
+		const existingItem = invoiceItems.value.find((i) =>
+			isCartLine(i, item.item_code, itemUom, item.warehouse)
 		);
 
 		if (existingItem) {
@@ -310,16 +323,13 @@ export function useInvoice() {
 	 * @param {string|null} uom - Optional UOM to match when same item exists with different UOMs.
 	 *                            If provided, only removes the item with matching item_code AND uom.
 	 *                            If null, removes the first item matching item_code.
+	 * @param {string|null} warehouse - Optional warehouse to match when the same item/UOM
+	 *                                  was added from multiple warehouses.
 	 */
-	function removeItem(itemCode, uom = null) {
-		let itemToRemove;
-		if (uom) {
-			itemToRemove = invoiceItems.value.find(
-				(i) => i.item_code === itemCode && i.uom === uom
-			);
-		} else {
-			itemToRemove = invoiceItems.value.find((i) => i.item_code === itemCode);
-		}
+	function removeItem(itemCode, uom = null, warehouse = null) {
+		const itemToRemove = invoiceItems.value.find((i) =>
+			isCartLine(i, itemCode, uom, warehouse)
+		);
 
 		if (itemToRemove) {
 			// Update cache incrementally (subtract removed item values)
@@ -340,7 +350,9 @@ export function useInvoice() {
 			}
 		}
 
-		if (uom) {
+		if (warehouse) {
+			invoiceItems.value = invoiceItems.value.filter((i) => i !== itemToRemove);
+		} else if (uom) {
 			invoiceItems.value = invoiceItems.value.filter(
 				(i) => !(i.item_code === itemCode && i.uom === uom)
 			);
@@ -356,14 +368,10 @@ export function useInvoice() {
 	 * @param {string|null} uom - Optional UOM to match when same item exists with different UOMs.
 	 *                            If provided, only updates the item with matching item_code AND uom.
 	 *                            If null, updates the first item matching item_code.
+	 * @param {string|null} warehouse - Optional warehouse to match (see removeItem)
 	 */
-	function updateItemQuantity(itemCode, quantity, uom = null) {
-		let item;
-		if (uom) {
-			item = invoiceItems.value.find((i) => i.item_code === itemCode && i.uom === uom);
-		} else {
-			item = invoiceItems.value.find((i) => i.item_code === itemCode);
-		}
+	function updateItemQuantity(itemCode, quantity, uom = null, warehouse = null) {
+		const item = invoiceItems.value.find((i) => isCartLine(i, itemCode, uom, warehouse));
 
 		if (item) {
 			// Store old values before update for incremental cache adjustment

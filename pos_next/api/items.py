@@ -53,6 +53,37 @@ def get_stock_availability(item_code, warehouse):
 	return flt(result[0].actual_qty) if result and result[0].actual_qty else 0.0
 
 
+def _get_total_stock_map(item_codes, company=None):
+	"""
+	Return {item_code: actual_qty} summed across all active warehouses.
+
+	Used for the "total stock" figure on the items listing, alongside the
+	POS profile warehouse stock (which remains the source for sale validation).
+
+	Args:
+		item_codes (list): Item codes to look up
+		company (str, optional): Limit to warehouses of this company
+	"""
+	if not item_codes:
+		return {}
+
+	Bin = DocType("Bin")
+	Warehouse = DocType("Warehouse")
+	query = (
+		frappe.qb.from_(Bin)
+		.inner_join(Warehouse)
+		.on(Warehouse.name == Bin.warehouse)
+		.select(Bin.item_code, fn.Sum(Bin.actual_qty).as_("qty"))
+		.where(Bin.item_code.isin(list(item_codes)))
+		.where(Warehouse.disabled == 0)
+		.groupby(Bin.item_code)
+	)
+	if company:
+		query = query.where(Warehouse.company == company)
+
+	return {row["item_code"]: flt(row["qty"]) for row in query.run(as_dict=True)}
+
+
 def get_item_detail(item, doc=None, warehouse=None, price_list=None, company=None):
 	"""
 	Get comprehensive item details including batch/serial data, pricing, and stock information.
@@ -1305,6 +1336,7 @@ def get_items(
 
 		# Batch query stock for all items at once using Query Builder
 		stock_map = {}
+		total_stock_map = {}
 		if item_codes and pos_profile_doc.warehouse:
 			stock_items = [item["item_code"] for item in items if item.get("is_stock_item")]
 			if stock_items:
@@ -1317,6 +1349,7 @@ def get_items(
 					.run(as_dict=True)
 				)
 				stock_map = {s["item_code"]: s["actual_qty"] for s in stocks}
+				total_stock_map = _get_total_stock_map(stock_items, pos_profile_doc.company)
 
 		# ===================================================================
 		# PRODUCT BUNDLE AVAILABILITY: Calculate bundle stock (bulk optimized)
@@ -1462,6 +1495,8 @@ def get_items(
 				if item.get("is_stock_item")
 				else bundle_availability_map.get(item["item_code"], 0)
 			)
+			if item.get("is_stock_item"):
+				item["total_qty"] = total_stock_map.get(item["item_code"], 0)
 
 			# ===================================================================
 			# BUNDLE MARKER: Flag items that are Product Bundles
@@ -1625,6 +1660,7 @@ def get_items_bulk(
 		# Stock
 		warehouse = pos_profile_doc.warehouse
 		stock_map = {}
+		total_stock_map = {}
 		if warehouse and item_codes:
 			warehouses = [warehouse]
 			if frappe.db.get_value("Warehouse", warehouse, "is_group"):
@@ -1640,6 +1676,7 @@ def get_items_bulk(
 				.run(as_dict=True)
 			)
 			stock_map = {s.item_code: flt(s.qty) for s in stock_data}
+			total_stock_map = _get_total_stock_map(item_codes, pos_profile_doc.company)
 
 		# Bundle availability
 		bundle_availability_map = {}
@@ -1679,6 +1716,8 @@ def get_items_bulk(
 				if item.get("is_stock_item")
 				else bundle_availability_map.get(item_code, 0)
 			)
+			if item.get("is_stock_item"):
+				item["total_qty"] = total_stock_map.get(item_code, 0)
 			item["warehouse"] = warehouse
 
 			# Bundle marker
@@ -1960,6 +1999,11 @@ def get_stock_quantities(item_codes, warehouse):
 		# Get bundle availability for non-stock items (bulk optimized)
 		bundle_availability_map = _calculate_bundle_availability_bulk(normalized_codes, warehouse)
 
+		# Stock across all warehouses of the same company (for the items listing)
+		total_stock_map = _get_total_stock_map(
+			normalized_codes, frappe.db.get_value("Warehouse", warehouse, "company")
+		)
+
 		# Return stock for all requested items
 		result = []
 		for item_code in normalized_codes:
@@ -1968,11 +2012,13 @@ def get_stock_quantities(item_codes, warehouse):
 				# Bundle item - use calculated availability
 				actual_qty = flt(bundle_availability_map[item_code])
 				reserved_qty = 0.0
+				total_qty = None
 			else:
 				# Regular item - use Bin data
 				row = item_stock_map.get(item_code)
 				actual_qty = flt(row["actual_qty"]) if row else 0.0
 				reserved_qty = flt(row["reserved_qty"]) if row else 0.0
+				total_qty = total_stock_map.get(item_code, 0.0)
 
 			result.append(
 				{
@@ -1982,6 +2028,7 @@ def get_stock_quantities(item_codes, warehouse):
 					"stock_qty": actual_qty,  # Alias for frontend convenience
 					"reserved_qty": reserved_qty,
 					"available_qty": actual_qty - reserved_qty,
+					"total_qty": total_qty,
 				}
 			)
 

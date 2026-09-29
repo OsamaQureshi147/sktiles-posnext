@@ -34,8 +34,9 @@ export const useStockStore = defineStore("stock", () => {
 	// ========================================================================
 	// STATE - Just 2 Maps, that's it!
 	// ========================================================================
-	const server = ref(new Map()); // item_code -> { qty, warehouse, ts }
-	const reserved = ref(new Map()); // item_code -> qty
+	const server = ref(new Map()); // item_code -> { qty, total, warehouse, ts }
+	const reserved = ref(new Map()); // item_code -> qty (cart lines from the current warehouse)
+	const reservedTotal = ref(new Map()); // item_code -> qty (cart lines from any warehouse)
 	const warehouse = ref(null); // Current warehouse
 	const refreshing = ref(false); // Loading state
 
@@ -46,6 +47,14 @@ export const useStockStore = defineStore("stock", () => {
 		// Always return the actual calculated stock (can be negative)
 		// Display is independent of whether negative stock sales are allowed
 		return (server.value.get(itemCode)?.qty || 0) - (reserved.value.get(itemCode) || 0);
+	};
+
+	// Stock across all warehouses (from server total_qty), minus this cart's reservations.
+	// Returns null when the server did not provide a total (e.g. bundles, stale cache)
+	const getDisplayTotalStock = (itemCode) => {
+		const total = server.value.get(itemCode)?.total;
+		if (total === undefined || total === null) return null;
+		return total - (reservedTotal.value.get(itemCode) || 0);
 	};
 
 	const getStockInfo = (itemCode) => ({
@@ -65,6 +74,7 @@ export const useStockStore = defineStore("stock", () => {
 		items?.forEach((item) =>
 			server.value.set(item.item_code, {
 				qty: item.actual_qty ?? item.stock_qty ?? 0,
+				total: item.total_qty,
 				warehouse: item.warehouse || warehouse.value,
 				ts: Date.now(),
 			})
@@ -73,6 +83,7 @@ export const useStockStore = defineStore("stock", () => {
 	// Update reservations from cart
 	const reserve = (cartItems) => {
 		reserved.value.clear();
+		reservedTotal.value.clear();
 
 		// Early return for empty or invalid cart
 		if (!cartItems || !Array.isArray(cartItems) || cartItems.length === 0) {
@@ -90,8 +101,13 @@ export const useStockStore = defineStore("stock", () => {
 			const factor = Number(cartItem.conversion_factor) || 1;
 			const itemCode = cartItem.item_code;
 
-			const current = reserved.value.get(itemCode) || 0;
-			reserved.value.set(itemCode, current + quantity * factor);
+			const stockQty = quantity * factor;
+
+			reservedTotal.value.set(itemCode, (reservedTotal.value.get(itemCode) || 0) + stockQty);
+
+			// Lines picked from another warehouse don't consume the current warehouse's stock
+			if (cartItem.warehouse && warehouse.value && cartItem.warehouse !== warehouse.value) return;
+			reserved.value.set(itemCode, (reserved.value.get(itemCode) || 0) + stockQty);
 		});
 	};
 
@@ -103,10 +119,21 @@ export const useStockStore = defineStore("stock", () => {
 		stockUpdates?.forEach((stockUpdate) =>
 			server.value.set(stockUpdate.item_code, {
 				qty: stockUpdate.actual_qty ?? stockUpdate.stock_qty,
+				total: stockUpdate.total_qty ?? server.value.get(stockUpdate.item_code)?.total,
 				warehouse: stockUpdate.warehouse || warehouse.value,
 				ts: Date.now(),
 			})
 		);
+
+	// Update only the all-warehouse totals (from realtime events of any warehouse)
+	const updateTotals = (stockUpdates) =>
+		stockUpdates?.forEach((stockUpdate) => {
+			const entry = server.value.get(stockUpdate.item_code);
+			if (!entry || stockUpdate.total_qty === undefined || stockUpdate.total_qty === null) {
+				return;
+			}
+			server.value.set(stockUpdate.item_code, { ...entry, total: stockUpdate.total_qty });
+		});
 
 	// Refresh stock from server (direct API call)
 	// Called after invoice submission, manual refresh, or warehouse change
@@ -119,6 +146,7 @@ export const useStockStore = defineStore("stock", () => {
 
 		// Snapshot current reservations to restore after fetch
 		const reservationSnapshot = new Map(reserved.value);
+		const totalReservationSnapshot = new Map(reservedTotal.value);
 
 		try {
 			const codesToRefresh = itemCodes || Array.from(server.value.keys());
@@ -140,12 +168,14 @@ export const useStockStore = defineStore("stock", () => {
 
 			// Restore reservations after fetch completes
 			reserved.value = reservationSnapshot;
+			reservedTotal.value = totalReservationSnapshot;
 
 			log.success(`Refreshed ${stockData.length} items`);
 		} catch (error) {
 			log.error("Refresh failed", error);
 			// Restore reservations even on error
 			reserved.value = reservationSnapshot;
+			reservedTotal.value = totalReservationSnapshot;
 		} finally {
 			refreshing.value = false;
 		}
@@ -179,18 +209,24 @@ export const useStockStore = defineStore("stock", () => {
 
 		// Getters
 		getDisplayStock,
+		getDisplayTotalStock,
 		getStockInfo,
 
 		// Actions
 		init,
 		reserve,
 		update,
+		updateTotals,
 		refresh,
 		setWarehouse: (targetWarehouse) => (warehouse.value = targetWarehouse),
-		clear: () => reserved.value.clear(),
+		clear: () => {
+			reserved.value.clear();
+			reservedTotal.value.clear();
+		},
 		reset: () => {
 			server.value.clear();
 			reserved.value.clear();
+			reservedTotal.value.clear();
 		},
 	};
 });

@@ -577,6 +577,17 @@
 									}}</span
 								>
 							</p>
+							<!-- Stock across all warehouses -->
+							<p
+								v-if="hasTotalStock(item)"
+								class="text-[9px] sm:text-[10px] text-gray-500 leading-tight mt-0.5 truncate"
+								:title="__('Stock across all warehouses')"
+							>
+								{{ __("All Warehouses") }}:
+								<span class="font-semibold text-gray-700">{{
+									formatStockQty(item.total_qty)
+								}}</span>
+							</p>
 						</div>
 					</div>
 				</div>
@@ -752,6 +763,12 @@
 							</th>
 							<th
 								scope="col"
+								class="hidden sm:table-cell px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 sm:w-[110px]"
+							>
+								{{ __("All Warehouses") }}
+							</th>
+							<th
+								scope="col"
 								class="hidden md:table-cell px-2 sm:px-3 py-2 sm:py-2.5 text-start text-[10px] sm:text-xs font-semibold text-gray-700 uppercase tracking-wider bg-gray-50 border-b-2 border-gray-200 sticky top-0 z-10 md:w-[80px]"
 							>
 								{{ __("UOM") }}
@@ -871,6 +888,18 @@
 									{{ __("N/A") }}
 								</span>
 							</td>
+							<td class="hidden sm:table-cell px-2 sm:px-3 py-2 whitespace-nowrap sm:w-[110px]">
+								<span
+									v-if="hasTotalStock(item)"
+									class="text-xs sm:text-sm font-semibold text-gray-700"
+									:title="__('Stock across all warehouses')"
+								>
+									{{ formatStockQty(item.total_qty) }}
+								</span>
+								<span v-else class="text-xs sm:text-sm text-gray-400 italic">
+									{{ __("N/A") }}
+								</span>
+							</td>
 							<td
 								class="hidden md:table-cell px-2 sm:px-3 py-2 whitespace-nowrap md:w-[80px]"
 							>
@@ -881,7 +910,7 @@
 						</tr>
 						<!-- Loading More Indicator Row -->
 						<tr v-if="loadingMore">
-							<td colspan="6" class="px-2 sm:px-3 py-4 text-center bg-white">
+							<td colspan="7" class="px-2 sm:px-3 py-4 text-center bg-white">
 								<div class="flex justify-center items-center">
 									<div
 										class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-500"
@@ -902,14 +931,14 @@
 								totalPages >= 1
 							"
 						>
-							<td colspan="6" class="px-2 sm:px-3 py-3 text-center bg-white">
+							<td colspan="7" class="px-2 sm:px-3 py-3 text-center bg-white">
 								<p class="text-xs text-gray-400">{{ __("All items loaded") }}</p>
 							</td>
 						</tr>
 
 						<!-- Search Results Count Row -->
 						<tr v-else-if="searchTerm && filteredItems.length > 0">
-							<td colspan="6" class="px-2 sm:px-3 py-3 text-center bg-white">
+							<td colspan="7" class="px-2 sm:px-3 py-3 text-center bg-white">
 								<p class="text-xs text-gray-500">
 									{{ __("{0} items found", [filteredItems.length]) }}
 								</p>
@@ -1030,6 +1059,7 @@ import { useStock } from "@/composables/useStock";
 import { useDialogState } from "@/composables/useDialogState";
 import { useSearchInput } from "@/composables/useSearchInput";
 import { DEFAULT_CURRENCY, formatCurrency as formatCurrencyUtil } from "@/utils/currency";
+import { isTileItem } from "@/utils/tileUom";
 import { useToast } from "@/composables/useToast";
 import { storeToRefs } from "pinia";
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
@@ -1437,7 +1467,9 @@ function selectItem(item, autoAdd = false) {
 		shouldValidateItemStock(item)
 	) {
 		const qty = item.actual_qty ?? item.stock_qty ?? 0;
-		if (qty <= 0) {
+		// Out of stock here but available in another warehouse: POSSale offers a warehouse picker
+		const stockedElsewhere = !autoAdd && (item.total_qty ?? 0) - qty > 0;
+		if (qty <= 0 && !stockedElsewhere) {
 			showError(
 				__('"{0}" is out of stock in warehouse "{1}".', [
 					item.item_name,
@@ -1466,18 +1498,28 @@ function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
 }
 
-// Item groups whose cards list the price of every UOM (compared case-insensitively)
-const UOM_PRICE_LIST_ITEM_GROUPS = ["tile"];
+// Stock across all warehouses is only provided for stock items (not bundles/templates)
+function hasTotalStock(item) {
+	return (
+		item.is_stock_item &&
+		!item.has_variants &&
+		item.total_qty !== undefined &&
+		item.total_qty !== null
+	);
+}
+
+function formatStockQty(qty) {
+	return Math.floor(qty || 0);
+}
 
 /**
  * Price per UOM for the item card: stock UOM first, then alternative UOMs.
  * Uses the UOM-specific Item Price when present, otherwise derives it from
  * the stock UOM rate via the conversion factor (same as ItemSelectionDialog).
- * Returns null for items outside UOM_PRICE_LIST_ITEM_GROUPS or with a single UOM.
+ * Returns null for items outside non-tile items or items with a single UOM.
  */
 function getUomPriceList(item) {
-	const group = (item.item_group || "").trim().toLowerCase();
-	if (!UOM_PRICE_LIST_ITEM_GROUPS.includes(group) || !item.item_uoms?.length) return null;
+	if (!isTileItem(item) || !item.item_uoms?.length) return null;
 
 	const baseRate = item.rate || item.price_list_rate || 0;
 	const uoms = [{ uom: item.stock_uom, conversion_factor: 1 }, ...item.item_uoms];

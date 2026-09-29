@@ -398,6 +398,13 @@ import { computed, nextTick, ref, watch } from "vue";
 import TranslatedHTML from "../common/TranslatedHTML.vue";
 import { offlineState } from "@/utils/offline/offlineState";
 import { getCachedVariants, cacheItems } from "@/utils/offline/items";
+import {
+	formatQty,
+	getCountBreakdown,
+	isAreaUom,
+	isTileItem,
+	roundPrecise,
+} from "@/utils/tileUom";
 
 const props = defineProps({
 	modelValue: Boolean,
@@ -459,38 +466,7 @@ const stockWarning = computed(() => {
 	return null;
 });
 
-// Item groups that show the UOM conversion breakdown (compared case-insensitively)
-const UOM_CONVERSION_ITEM_GROUPS = ["tile"];
-
-const showUomConversions = computed(() => {
-	const group = (props.item?.item_group || "").trim().toLowerCase();
-	return props.mode === "uom" && UOM_CONVERSION_ITEM_GROUPS.includes(group);
-});
-
-// UOM names treated as area units (normalized: lowercase, alphanumerics only)
-const AREA_UOM_NAMES = [
-	"sqm",
-	"sqmeter",
-	"sqmeters",
-	"sqmtr",
-	"squaremeter",
-	"squaremeters",
-	"squaremetre",
-	"squaremetres",
-	"m2",
-	"sqft",
-	"squarefoot",
-	"squarefeet",
-];
-
-function isAreaUom(uom) {
-	return AREA_UOM_NAMES.includes((uom || "").toLowerCase().replace(/[^a-z0-9]/g, ""));
-}
-
-// Avoid floating point noise (e.g. 3.0000000004) before ceil/floor
-function roundPrecise(value) {
-	return Math.round(value * 1e6) / 1e6;
-}
+const showUomConversions = computed(() => props.mode === "uom" && isTileItem(props.item));
 
 /**
  * Tile breakdown based on conversion factors (all relative to stock UOM):
@@ -508,9 +484,6 @@ const tileBreakdown = computed(() => {
 
 	const validOptions = options.value.filter((opt) => opt.conversion_factor > 0);
 	const areaOptions = validOptions.filter((opt) => isAreaUom(opt.uom));
-	const countOptions = validOptions
-		.filter((opt) => !isAreaUom(opt.uom))
-		.sort((a, b) => b.conversion_factor - a.conversion_factor);
 
 	if (validOptions.length < 2) return null;
 
@@ -525,25 +498,11 @@ const tileBreakdown = computed(() => {
 
 	// Whole-unit count breakdown, e.g. "6 Box + 4 Piece"
 	const references = [];
-	if (countOptions.length > 0) {
-		const smallest = countOptions[countOptions.length - 1];
-		let remaining = Math.ceil(roundPrecise(stockQty / smallest.conversion_factor));
-
-		const parts = [];
-		countOptions.forEach((opt, index) => {
-			const perUnit = Math.max(1, Math.round(opt.conversion_factor / smallest.conversion_factor));
-			const isLast = index === countOptions.length - 1;
-			const count = isLast ? remaining : Math.floor(remaining / perUnit);
-			remaining -= count * perUnit;
-			if (count > 0) parts.push(`${count} ${opt.uom}`);
-
-			if (!isLast) {
-				references.push(`1 ${opt.uom} = ${formatQty(perUnit)} ${smallest.uom}`);
-			}
-		});
-
-		const breakdown = parts.join(" + ") || `0 ${smallest.uom}`;
-		if (breakdown !== segments[0]) segments.push(breakdown);
+	const countBreakdown = getCountBreakdown(stockQty, validOptions);
+	if (countBreakdown) {
+		const { text, smallest } = countBreakdown;
+		references.push(...countBreakdown.references);
+		if (text !== segments[0]) segments.push(text);
 
 		areaOptions.forEach((opt) => {
 			references.push(
@@ -555,10 +514,6 @@ const tileBreakdown = computed(() => {
 	if (segments.length < 2) return null;
 	return { segments, references };
 });
-
-function formatQty(value) {
-	return Number(value || 0).toLocaleString(undefined, { maximumFractionDigits: 3 });
-}
 
 // Area UOMs (SQM, etc.) allow decimal quantities, e.g. 10.5 SQM
 const allowDecimalQty = computed(() => isAreaUom(selectedOption.value?.uom));

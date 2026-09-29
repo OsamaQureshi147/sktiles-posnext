@@ -570,6 +570,7 @@ export const useItemSearchStore = defineStore("itemSearch", () => {
 				actual_qty: displayStock,
 				stock_qty: displayStock,
 				original_stock: originalStock,
+				total_qty: stockStore.getDisplayTotalStock(item.item_code) ?? item.total_qty,
 			};
 		});
 

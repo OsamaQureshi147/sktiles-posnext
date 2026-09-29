@@ -1451,6 +1451,9 @@ async function updateStockQuantities(stockUpdates) {
 			item.actual_qty = actual_qty !== undefined ? actual_qty : stock_qty;
 			item.stock_qty = stock_qty !== undefined ? stock_qty : actual_qty;
 			item.warehouse = warehouse || item.warehouse;
+			if (update.total_qty !== undefined && update.total_qty !== null) {
+				item.total_qty = update.total_qty;
+			}
 
 			// Save updated item back to cache
 			await db.table("items").put(item);
