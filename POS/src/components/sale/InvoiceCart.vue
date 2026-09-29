@@ -105,6 +105,27 @@
 									>
 										{{ customer.mobile_no }}
 									</p>
+									<p
+										v-if="customerBalance"
+										class="text-[10px] font-semibold truncate leading-tight"
+										:class="
+											customerBalance.net_balance > 0
+												? 'text-red-600'
+												: customerBalance.net_balance < 0
+													? 'text-green-600'
+													: 'text-gray-500'
+										"
+									>
+										<template v-if="customerBalance.net_balance > 0">
+											{{ __("Outstanding") }}:
+											{{ formatCurrency(customerBalance.net_balance) }}
+										</template>
+										<template v-else-if="customerBalance.net_balance < 0">
+											{{ __("Credit") }}:
+											{{ formatCurrency(-customerBalance.net_balance) }}
+										</template>
+										<template v-else>{{ __("No outstanding balance") }}</template>
+									</p>
 								</div>
 							</div>
 
@@ -1532,6 +1553,7 @@ const props = defineProps({
 		default: 0,
 	},
 	posProfile: String,
+	company: String,
 	currency: {
 		type: String,
 		default: DEFAULT_CURRENCY,
@@ -1683,6 +1705,51 @@ watch(
 		} else {
 			availableGiftCards.value = [];
 		}
+	}
+);
+
+/**
+ * Selected customer's receivable balance (net of returns/advances credit).
+ * net_balance > 0 means the customer owes; < 0 means they have credit.
+ *
+ * @endpoint pos_next.api.credit_sales.get_customer_balance
+ */
+const customerBalance = ref(null);
+
+const customerBalanceResource = createResource({
+	url: "pos_next.api.credit_sales.get_customer_balance",
+	makeParams() {
+		return {
+			customer: props.customer?.name || props.customer,
+			company: props.company,
+		};
+	},
+	auto: false,
+	onSuccess(data) {
+		customerBalance.value = data?.message || data || null;
+	},
+	onError(error) {
+		log.error("Error loading customer balance:", error);
+		customerBalance.value = null;
+	},
+});
+
+function loadCustomerBalance() {
+	const customerName = props.customer?.name || props.customer;
+	if (customerName && !isOffline()) {
+		customerBalanceResource.reload();
+	} else {
+		customerBalance.value = null;
+	}
+}
+
+watch(() => props.customer?.name || props.customer, loadCustomerBalance, { immediate: true });
+
+// Cart emptied (invoice submitted or cleared) — balance may have changed
+watch(
+	() => props.items.length,
+	(len, prevLen) => {
+		if (len === 0 && prevLen > 0) loadCustomerBalance();
 	}
 );
 
