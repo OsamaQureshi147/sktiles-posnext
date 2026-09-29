@@ -377,6 +377,29 @@ async function resolvePrintSettings(posProfile, printFormat, letterhead) {
 // ============================================================================
 
 /**
+ * Open Frappe's /printview for any document in a new window with
+ * trigger_print=1. Throws when the popup is blocked.
+ */
+function openPrintView(doctype, name, format, letterhead = null) {
+	const params = new URLSearchParams({
+		doctype,
+		name,
+		format,
+		no_letterhead: letterhead ? 0 : 1,
+		_lang: "en",
+		trigger_print: 1,
+		_t: Date.now(),
+	});
+	if (letterhead) params.append("letterhead", letterhead);
+
+	const printWindow = window.open(`/printview?${params}`, "_blank", "width=800,height=600");
+	if (!printWindow) {
+		throw new Error("Popup blocked — check your browser settings.");
+	}
+	return true;
+}
+
+/**
  * Open Frappe's /printview in a new browser window.
  * The page includes trigger_print=1 so the OS print dialog appears automatically.
  * Falls back to the hardcoded receipt template if the popup is blocked.
@@ -400,22 +423,7 @@ export async function printInvoice(invoiceData, printFormat = null, letterhead =
 		const doctype = invoiceData.doctype || "Sales Invoice";
 		const format = printFormat || DEFAULT_PRINT_FORMAT;
 
-		const params = new URLSearchParams({
-			doctype,
-			name: invoiceData.name,
-			format,
-			no_letterhead: letterhead ? 0 : 1,
-			_lang: "en",
-			trigger_print: 1,
-			_t: Date.now(),
-		});
-		if (letterhead) params.append("letterhead", letterhead);
-
-		const printWindow = window.open(`/printview?${params}`, "_blank", "width=800,height=600");
-		if (!printWindow) {
-			throw new Error("Popup blocked — check your browser settings.");
-		}
-		return true;
+		return openPrintView(doctype, invoiceData.name, format, letterhead);
 	} catch (error) {
 		log.error("Browser print failed:", error);
 		if (isLocalOnlyInvoiceName(invoiceData?.name) && !(invoiceData.items?.length > 0)) {
@@ -553,6 +561,36 @@ export async function printWithSilentFallback(invoiceData, printFormat = null) {
 		log.error("Browser print fallback also failed:", err);
 		return { method: "browser", success: false };
 	}
+}
+
+// ============================================================================
+// Warehouse copy (picking / loading slip, no prices)
+// ============================================================================
+
+/**
+ * Print the warehouse copy of a submitted Sales Invoice using the given
+ * print format. Needs the server document, so local-only (unsynced) invoices
+ * are rejected. Never falls back to the local receipt template (it has prices).
+ */
+export async function printWarehouseCopy(invoiceName, printFormat, { silent = false } = {}) {
+	if (!invoiceName) throw new Error("Invalid invoice data — missing name");
+	if (!printFormat) throw new Error(__("No warehouse copy print format set on the POS Profile"));
+	if (isLocalOnlyInvoiceName(invoiceName)) {
+		throw new Error(__("Warehouse copy is available once the invoice is synced"));
+	}
+
+	if (silent) {
+		try {
+			await silentPrintDoc("Sales Invoice", invoiceName, printFormat);
+			log.info(`Silent warehouse copy sent for ${invoiceName}`);
+			return { method: "silent", success: true };
+		} catch (err) {
+			log.warn("Silent warehouse copy failed, falling back to browser:", err?.message || err);
+		}
+	}
+
+	openPrintView("Sales Invoice", invoiceName, printFormat);
+	return { method: "browser", success: true };
 }
 
 // ============================================================================

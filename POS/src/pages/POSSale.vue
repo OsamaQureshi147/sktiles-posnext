@@ -624,7 +624,9 @@
 				:pos-opening-shift="shiftStore.currentShift?.name"
 				:currency="shiftStore.profileCurrency"
 				@view-invoice="handleViewInvoice"
+				:warehouse-print-format="shiftStore.warehousePrintFormat"
 				@print-invoice="handlePrintInvoice"
+				@print-warehouse-copy="handlePrintWarehouseCopy"
 				@return-created="handleReturnCreated"
 			/>
 
@@ -684,7 +686,9 @@
 				:history-invoices="invoiceHistoryData"
 				:draft-invoices="draftsStore.drafts"
 				@view-invoice="handleViewInvoice"
+				:warehouse-print-format="shiftStore.warehousePrintFormat"
 				@print-invoice="handlePrintInvoice"
+				@print-warehouse-copy="handlePrintWarehouseCopy"
 				@load-draft="handleLoadDraftFromManagement"
 				@delete-draft="handleDeleteDraft"
 				@refresh-history="loadInvoiceHistoryData"
@@ -696,7 +700,9 @@
 				:invoice-name="selectedInvoiceForView"
 				:pos-profile="shiftStore.profileName"
 				:currency="shiftStore.profileCurrency"
+				:warehouse-print-format="shiftStore.warehousePrintFormat"
 				@print-invoice="handlePrintInvoice"
+				@print-warehouse-copy="handlePrintWarehouseCopy"
 			/>
 
 			<!-- Clear Cart Confirmation Dialog -->
@@ -934,6 +940,54 @@
 						>
 							{{ __("Print Invoice") }}
 						</Button>
+						<Button
+							v-if="shiftStore.warehousePrintFormat"
+							variant="subtle"
+							:disabled="isLocalOnlyInvoiceName(uiStore.lastInvoiceName)"
+							:title="
+								isLocalOnlyInvoiceName(uiStore.lastInvoiceName)
+									? __('Warehouse copy is available once the invoice is synced')
+									: __('Print Warehouse Copy')
+							"
+							@click="handlePrintWarehouseCopy({ name: uiStore.lastInvoiceName })"
+						>
+							{{ __("Warehouse Copy") }}
+						</Button>
+					</div>
+				</template>
+			</Dialog>
+
+			<!-- Warehouse Copy Prompt (shown after auto-printed sales) -->
+			<Dialog
+				v-model="showWarehouseCopyPrompt"
+				:options="{ title: __('Print Warehouse Copy?'), size: 'sm' }"
+			>
+				<template #body-content>
+					<p class="text-sm text-gray-600 py-2">
+						{{
+							__("Do you want to print the warehouse copy for invoice {0}?", [
+								warehouseCopyInvoiceName,
+							])
+						}}
+					</p>
+				</template>
+				<template #actions>
+					<div class="flex gap-2">
+						<Button variant="subtle" @click="showWarehouseCopyPrompt = false">
+							{{ __("Skip") }}
+						</Button>
+						<Button
+							variant="solid"
+							theme="blue"
+							@click="
+								() => {
+									showWarehouseCopyPrompt = false;
+									handlePrintWarehouseCopy({ name: warehouseCopyInvoiceName });
+								}
+							"
+						>
+							{{ __("Print") }}
+						</Button>
 					</div>
 				</template>
 			</Dialog>
@@ -1049,8 +1103,10 @@ import { cacheOfflineReceiptPayload } from "@/utils/offline/offlineReceiptCache"
 import { cacheInvoiceHistory, getCachedInvoiceHistory } from "@/utils/offline/sync";
 import {
 	hydrateLocalOnlyInvoice,
+	isLocalOnlyInvoiceName,
 	printInvoice,
 	printInvoiceByName,
+	printWarehouseCopy,
 	printWithSilentFallback,
 } from "@/utils/printInvoice";
 import { qzConnected, connect as qzConnect, disconnect as qzDisconnect } from "@/utils/qzTray";
@@ -1166,6 +1222,10 @@ const showStockLookup = ref(false);
 
 // Invoice Management dialog
 const showInvoiceManagement = ref(false);
+
+// Warehouse copy prompt (after auto-printed sale)
+const showWarehouseCopyPrompt = ref(false);
+const warehouseCopyInvoiceName = ref(null);
 
 // Invoice Detail dialog
 const showInvoiceDetail = ref(false);
@@ -2197,6 +2257,10 @@ async function handlePaymentCompleted(paymentData) {
 				draftsStore.deleteDraft(draftIdToDelete);
 			}
 
+			if (shiftStore.askWarehouseCopy) {
+				showWarning(__("Warehouse copy is available once the invoice is synced"));
+			}
+
 			if (shiftStore.autoPrintEnabled || posSettingsStore.silentPrint) {
 				try {
 					await handlePrintInvoice({ name: offlineReceiptName });
@@ -2284,6 +2348,12 @@ async function handlePaymentCompleted(paymentData) {
 					} catch (error) {
 						log.error("Auto-print error:", error);
 						showWarning(__("Invoice {0} created but print failed", [invoiceName]));
+					}
+					// Success dialog is skipped here, so ask for the warehouse copy separately.
+					// The user's click on "Print" keeps the popup from being blocked.
+					if (shiftStore.askWarehouseCopy) {
+						warehouseCopyInvoiceName.value = invoiceName;
+						showWarehouseCopyPrompt.value = true;
 					}
 				} else {
 					uiStore.showSuccess(invoiceName, invoiceTotal, paidAmount);
@@ -3013,7 +3083,7 @@ async function handlePrintInvoice(invoiceData) {
 
 		// Silent print path — send directly to thermal printer via QZ Tray
 		if (posSettingsStore.silentPrint) {
-			const result = await printWithSilentFallback(invoiceData);
+			const result = await printWithSilentFallback(invoiceData, shiftStore.printFormat);
 			if (result.method === "browser") {
 				log.info("Used browser print fallback");
 			}
@@ -3022,7 +3092,7 @@ async function handlePrintInvoice(invoiceData) {
 
 		// Standard browser print path
 		if (invoiceData.items && Array.isArray(invoiceData.items)) {
-			await printInvoice(invoiceData);
+			await printInvoice(invoiceData, shiftStore.printFormat, shiftStore.letterHead);
 		} else {
 			// If it's just an invoice object with name, fetch and print
 			// printInvoiceByName will automatically fetch the print format from the invoice's POS Profile
@@ -3035,6 +3105,30 @@ async function handlePrintInvoice(invoiceData) {
 			message: "Failed to print invoice",
 			indicator: "red",
 		});
+	}
+}
+
+// Warehouse copy (picking slip without prices) — needs the synced server invoice
+async function handlePrintWarehouseCopy(invoiceData) {
+	const invoiceName = invoiceData?.name;
+	if (!invoiceName || !shiftStore.warehousePrintFormat) return;
+
+	if (isLocalOnlyInvoiceName(invoiceName) || invoiceData.is_offline) {
+		showWarning(__("Warehouse copy is available once the invoice is synced"));
+		return;
+	}
+	if (invoiceData.docstatus != null && invoiceData.docstatus !== 1) {
+		showWarning(__("Warehouse copy is only available for submitted invoices"));
+		return;
+	}
+
+	try {
+		await printWarehouseCopy(invoiceName, shiftStore.warehousePrintFormat, {
+			silent: posSettingsStore.silentPrint,
+		});
+	} catch (error) {
+		log.error("Error printing warehouse copy:", error);
+		showError(error?.message || __("Failed to print warehouse copy"));
 	}
 }
 

@@ -759,6 +759,27 @@
 												</svg>
 												<span>{{ __("Print") }}</span>
 											</button>
+											<button
+												v-if="canPrintWarehouseCopy(invoice)"
+												@click="$emit('print-warehouse-copy', invoice)"
+												class="px-3 py-2 text-xs font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors flex items-center gap-1"
+												:title="__('Warehouse Copy')"
+											>
+												<svg
+													class="w-4 h-4"
+													fill="none"
+													stroke="currentColor"
+													viewBox="0 0 24 24"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														stroke-width="2"
+														d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+													/>
+												</svg>
+												<span>{{ __("Warehouse Copy") }}</span>
+											</button>
 										</div>
 									</div>
 								</div>
@@ -995,6 +1016,26 @@
 															/>
 														</svg>
 													</button>
+													<button
+														v-if="canPrintWarehouseCopy(invoice)"
+														@click="$emit('print-warehouse-copy', invoice)"
+														class="p-1.5 hover:bg-indigo-50 rounded transition-colors"
+														:title="__('Warehouse Copy')"
+													>
+														<svg
+															class="w-4 h-4 text-indigo-600"
+															fill="none"
+															stroke="currentColor"
+															viewBox="0 0 24 24"
+														>
+															<path
+																stroke-linecap="round"
+																stroke-linejoin="round"
+																stroke-width="2"
+																d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+															/>
+														</svg>
+													</button>
 												</div>
 											</div>
 										</div>
@@ -1054,6 +1095,10 @@ const props = defineProps({
 		type: String,
 		default: DEFAULT_CURRENCY,
 	},
+	warehousePrintFormat: {
+		type: String,
+		default: null,
+	},
 	// Pass in data from parent stores
 	historyInvoices: {
 		type: Array,
@@ -1069,6 +1114,7 @@ const emit = defineEmits([
 	"update:modelValue",
 	"view-invoice",
 	"print-invoice",
+	"print-warehouse-copy",
 	"load-draft",
 	"delete-draft",
 	"refresh-history",
@@ -1076,6 +1122,10 @@ const emit = defineEmits([
 
 const show = ref(props.modelValue);
 const loading = ref(false);
+
+function canPrintWarehouseCopy(invoice) {
+	return Boolean(props.warehousePrintFormat) && (invoice?.docstatus ?? 1) === 1;
+}
 const activeTab = ref("partial");
 
 // Initialize filter store and composable

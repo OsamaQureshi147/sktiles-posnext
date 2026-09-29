@@ -165,6 +165,26 @@
 										</svg>
 									</button>
 									<button
+										v-if="canPrintWarehouseCopy(invoice)"
+										@click="printWarehouseCopy(invoice)"
+										class="p-1.5 hover:bg-indigo-50 rounded transition-colors"
+										:title="__('Warehouse Copy')"
+									>
+										<svg
+											class="w-4 h-4 text-indigo-600"
+											fill="none"
+											stroke="currentColor"
+											viewBox="0 0 24 24"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												stroke-width="2"
+												d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+											/>
+										</svg>
+									</button>
+									<button
 										v-if="canCreateReturn(invoice)"
 										@click="openReturnModal(invoice)"
 										class="p-1.5 hover:bg-orange-50 rounded transition-colors"
@@ -232,6 +252,10 @@ const props = defineProps({
 	modelValue: Boolean,
 	posProfile: String,
 	posOpeningShift: String,
+	warehousePrintFormat: {
+		type: String,
+		default: null,
+	},
 	currency: {
 		type: String,
 		default: DEFAULT_CURRENCY,
@@ -247,6 +271,7 @@ const emit = defineEmits([
 	"create-return",
 	"view-invoice",
 	"print-invoice",
+	"print-warehouse-copy",
 	"return-created",
 ]);
 
@@ -381,6 +406,14 @@ function viewInvoice(invoice) {
 
 function printInvoice(invoice) {
 	emit("print-invoice", invoice);
+}
+
+function canPrintWarehouseCopy(invoice) {
+	return Boolean(props.warehousePrintFormat) && invoice?.docstatus === 1;
+}
+
+function printWarehouseCopy(invoice) {
+	emit("print-warehouse-copy", invoice);
 }
 
 function canCreateReturn(invoice) {

@@ -465,19 +465,38 @@
 				<Button variant="subtle" @click="show = false">
 					{{ __("Close") }}
 				</Button>
-				<Button @click="handlePrint">
-					<template #prefix>
-						<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-							<path
-								stroke-linecap="round"
-								stroke-linejoin="round"
-								stroke-width="2"
-								d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
-							/>
-						</svg>
-					</template>
-					{{ __("Print") }}
-				</Button>
+				<div class="flex items-center gap-2">
+					<Button
+						v-if="canPrintWarehouseCopy"
+						variant="subtle"
+						@click="handlePrintWarehouseCopy"
+					>
+						<template #prefix>
+							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"
+								/>
+							</svg>
+						</template>
+						{{ __("Warehouse Copy") }}
+					</Button>
+					<Button @click="handlePrint">
+						<template #prefix>
+							<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									stroke-width="2"
+									d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+								/>
+							</svg>
+						</template>
+						{{ __("Print") }}
+					</Button>
+				</div>
 			</div>
 		</template>
 	</Dialog>
@@ -503,13 +522,17 @@ const props = defineProps({
 		type: String,
 		default: DEFAULT_CURRENCY,
 	},
+	warehousePrintFormat: {
+		type: String,
+		default: null,
+	},
 });
 
 function formatCurrency(amount) {
 	return formatCurrencyUtil(Number.parseFloat(amount || 0), props.currency);
 }
 
-const emit = defineEmits(["update:modelValue", "print-invoice"]);
+const emit = defineEmits(["update:modelValue", "print-invoice", "print-warehouse-copy"]);
 
 const show = ref(props.modelValue);
 const loading = ref(false);
@@ -620,5 +643,18 @@ async function loadInvoiceDetails() {
 function handlePrint() {
 	if (!invoiceData.value) return;
 	emit("print-invoice", invoiceData.value);
+}
+
+// Warehouse copy needs the submitted server document (not a local offline receipt)
+const canPrintWarehouseCopy = computed(
+	() =>
+		Boolean(props.warehousePrintFormat) &&
+		invoiceData.value?.docstatus === 1 &&
+		!isLocalOnlyInvoiceName(invoiceData.value?.name)
+);
+
+function handlePrintWarehouseCopy() {
+	if (!canPrintWarehouseCopy.value) return;
+	emit("print-warehouse-copy", invoiceData.value);
 }
 </script>
