@@ -30,6 +30,20 @@ ITEM_RESULT_FIELDS = [
 
 ITEM_RESULT_COLUMNS = ",\n\t".join(ITEM_RESULT_FIELDS)
 
+# Site-specific Item fields returned when they exist. custom_pieces_per_box marks
+# tile items whose cart quantity is rounded up to whole pieces on the client.
+OPTIONAL_ITEM_RESULT_FIELDS = ["custom_pieces_per_box"]
+
+
+def get_optional_item_fields():
+	"""OPTIONAL_ITEM_RESULT_FIELDS present on this site's Item doctype."""
+	meta = frappe.get_meta("Item")
+	return [f for f in OPTIONAL_ITEM_RESULT_FIELDS if meta.has_field(f)]
+
+
+def get_item_result_fields():
+	return ITEM_RESULT_FIELDS + get_optional_item_fields()
+
 
 def get_stock_availability(item_code, warehouse):
 	"""Return total available quantity for an item in the given warehouse."""
@@ -434,6 +448,10 @@ def search_by_barcode(barcode, pos_profile):
 
 		item_details["uom_prices"] = uom_prices
 
+		optional_fields = get_optional_item_fields()
+		if optional_fields:
+			item_details.update(frappe.db.get_value("Item", item_code, optional_fields, as_dict=True) or {})
+
 		# Apply resolved barcode data (weighted/priced) to the item details
 		if resolved_barcode_data:
 			from pos_next.services.barcode import compute_resolved_item_data
@@ -562,6 +580,8 @@ def get_item_variants(template_item, pos_profile):
 			.where(Item.disabled == 0)
 			.where(Item.is_sales_item == 1)
 		)
+		for field in get_optional_item_fields():
+			query = query.select(Item[field])
 
 		variants = query.run(as_dict=True)
 
@@ -1230,9 +1250,10 @@ def get_items(
 		)
 
 		# Build column list with table alias
-		item_columns = ",\n\t".join([f"i.{col}" for col in ITEM_RESULT_FIELDS])
+		result_fields = get_item_result_fields()
+		item_columns = ",\n\t".join([f"i.{col}" for col in result_fields])
 		# For GROUP BY, extract just the column name (before " as " if present)
-		group_by_columns = ", ".join([f"i.{col.split(' as ')[0]}" for col in ITEM_RESULT_FIELDS])
+		group_by_columns = ", ".join([f"i.{col.split(' as ')[0]}" for col in result_fields])
 
 		# Add search conditions if search term provided
 		if effective_search_term and effective_search_term.strip():
@@ -1600,8 +1621,9 @@ def get_items_bulk(
 			conditions.append(f"i.item_group IN ({placeholders})")
 			params.extend(all_groups)
 
-		item_columns = ",\n\t".join([f"i.{col}" for col in ITEM_RESULT_FIELDS])
-		group_by_columns = ", ".join([f"i.{col.split(' as ')[0]}" for col in ITEM_RESULT_FIELDS])
+		result_fields = get_item_result_fields()
+		item_columns = ",\n\t".join([f"i.{col}" for col in result_fields])
+		group_by_columns = ", ".join([f"i.{col.split(' as ')[0]}" for col in result_fields])
 
 		where_clause = " AND ".join(conditions)
 		query = f"""

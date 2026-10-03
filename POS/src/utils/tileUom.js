@@ -86,3 +86,64 @@ export function getCountBreakdown(stockQty, uomOptions) {
 	if (stockQty < 0 && parts.length > 0) text = parts.length > 1 ? `-(${text})` : `-${text}`;
 	return { text, references, countOptions, smallest };
 }
+
+// ---------------------------------------------------------------------------
+// Whole-piece rounding
+//
+// The "Sales Round off pieces" server script converts every tile row (Item has
+// custom_pieces_per_box) to whole Pieces and re-prices it at the Piece price.
+// The cart mirrors that: the line keeps the cashier's UOM, its quantity is
+// bumped so it covers a whole number of pieces, and its amount is
+// pieces x Piece price. The line is submitted as Piece so the script has nothing
+// left to change.
+// ---------------------------------------------------------------------------
+
+export const PIECE_UOM = "Piece";
+
+// Smallest quantity step the server keeps (System Settings float precision = 3)
+const QTY_STEP = 0.001;
+
+export function isPieceRoundedItem(item) {
+	return Number(item?.custom_pieces_per_box) > 0;
+}
+
+/**
+ * Smallest quantity (on the QTY_STEP grid) that covers `pieces` whole pieces.
+ *   e.g. 27 pieces, SQM = 5.381955208 -> 5.017 SQM
+ */
+export function quantityForPieces(pieces, conversionFactor) {
+	const sign = pieces < 0 ? -1 : 1;
+	const steps = Math.ceil(roundPrecise(Math.abs(pieces) / conversionFactor / QTY_STEP));
+	return sign * roundPrecise(steps * QTY_STEP);
+}
+
+/**
+ * Whole pieces a tile line sells (rounded up, sign kept for returns),
+ * or null when the line is not a tile item.
+ */
+export function getLinePieces(line) {
+	if (!isPieceRoundedItem(line)) return null;
+	const qty = Number(line.quantity) || 0;
+	const cf = Number(line.conversion_factor) || 1;
+	const absQty = Math.abs(qty);
+
+	let pieces = Math.ceil(roundPrecise(absQty * cf));
+	// A quantity already bumped by quantityForPieces() overshoots by less than one
+	// step (5.017 SQM = 27.001 pieces) - it still means the smaller piece count.
+	if (pieces > 0 && absQty <= quantityForPieces(pieces - 1, cf)) pieces -= 1;
+	return qty < 0 ? -pieces : pieces;
+}
+
+/**
+ * Price of one piece for a tile line: the manually edited rate converted to a
+ * piece, else the Piece Item Price, else the line's price converted to a piece.
+ */
+export function getLinePieceRate(line) {
+	if (line.is_free_item) return 0;
+	const cf = Number(line.conversion_factor) || 1;
+	if (line.is_rate_manually_edited === 1) return (line.rate || 0) / cf;
+	if (line.uom !== PIECE_UOM && line.uom_prices?.[PIECE_UOM]) {
+		return line.uom_prices[PIECE_UOM];
+	}
+	return (line.price_list_rate || line.rate || 0) / cf;
+}

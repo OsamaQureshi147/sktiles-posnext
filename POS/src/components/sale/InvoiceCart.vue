@@ -2106,6 +2106,7 @@ function incrementQuantity(item) {
 	const step = getSmartStep(item.quantity);
 	const newQty = Math.round((item.quantity + step) * 10000) / 10000;
 	emit("update-quantity", item.item_code, newQty, item.uom, item.warehouse);
+	cartStore.roundTileLine(item);
 }
 
 /**
@@ -2126,6 +2127,7 @@ function decrementQuantity(item) {
 		emit("remove-item", item.item_code, item.uom, item.warehouse);
 	} else {
 		emit("update-quantity", item.item_code, newQty, item.uom, item.warehouse);
+		cartStore.roundTileLine(item);
 	}
 }
 
@@ -2172,6 +2174,8 @@ function handleQuantityBlur(item) {
 		if (roundedQty !== item.quantity) {
 			emit("update-quantity", item.item_code, roundedQty, item.uom, item.warehouse);
 		}
+		// Tile items: bump to whole pieces only after typing is done
+		cartStore.roundTileLine(item);
 	}
 }
 
@@ -2189,7 +2193,8 @@ function handleQuantityBlur(item) {
  */
 function getTileBreakdown(item) {
 	if (!isTileItem(item)) return null;
-	const stockQty = (item.quantity || 0) * (item.conversion_factor || 1);
+	// Tile lines sell whole pieces (tile_pieces); don't re-ceil the bumped quantity
+	const stockQty = item.tile_pieces ?? (item.quantity || 0) * (item.conversion_factor || 1);
 	const breakdown = getCountBreakdown(stockQty, getItemUomOptions(item));
 	if (!breakdown || breakdown.countOptions.length < 2) return null;
 	const uom = item.uom || item.stock_uom;

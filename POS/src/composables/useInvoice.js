@@ -5,6 +5,12 @@ import { useSerialNumberStore } from "@/stores/serialNumber";
 import { CoalescingMutex } from "@/utils/mutex";
 import { logger } from "@/utils/logger";
 import { roundCurrency } from "@/utils/currency";
+import {
+	PIECE_UOM,
+	getLinePieceRate,
+	getLinePieces,
+	quantityForPieces,
+} from "@/utils/tileUom";
 
 const log = logger.create("Invoice");
 
@@ -228,7 +234,11 @@ export function useInvoice() {
 	}
 
 	// Actions
+	/**
+	 * @returns {Object|null} Tile quantity change (see roundTileQuantity), if any
+	 */
 	function addItem(item, quantity = 1) {
+		let tileChange = null;
 		const itemUom = item.uom || item.stock_uom;
 		const existingItem = invoiceItems.value.find((i) =>
 			isCartLine(i, item.item_code, itemUom, item.warehouse)
@@ -238,10 +248,7 @@ export function useInvoice() {
 			// Store old values before update for incremental cache adjustment
 			// Use price_list_rate for subtotal calculations (before discount)
 			// IMPORTANT: Calculate oldAmount using same rounding as cache to ensure consistency
-			const oldPriceListRate = existingItem.price_list_rate || existingItem.rate;
-			const oldAmount = roundCurrency(
-				existingItem.quantity * roundCurrency(oldPriceListRate)
-			);
+			const oldAmount = lineBaseAmount(existingItem);
 			const oldTax = existingItem.tax_amount || 0;
 			const oldDiscount = existingItem.discount_amount || 0;
 
@@ -259,13 +266,11 @@ export function useInvoice() {
 			} else {
 				existingItem.quantity += quantity;
 			}
+			tileChange = roundTileQuantity(existingItem);
 			recalculateItem(existingItem);
 
 			// Update cache incrementally (new values - old values)
-			// Use rounded price_list_rate for subtotal to match ERPNext
-			const priceListRate = existingItem.price_list_rate || existingItem.rate;
-			_cachedSubtotal.value +=
-				roundCurrency(existingItem.quantity * roundCurrency(priceListRate)) - oldAmount;
+			_cachedSubtotal.value += lineBaseAmount(existingItem) - oldAmount;
 			_cachedTotalTax.value += (existingItem.tax_amount || 0) - oldTax;
 			_cachedTotalDiscount.value += (existingItem.discount_amount || 0) - oldDiscount;
 		} else {
@@ -291,6 +296,9 @@ export function useInvoice() {
 				batch_no: item.batch_no,
 				serial_no: item.serial_no,
 				item_uoms: item.item_uoms || [], // Available UOMs for this item
+				uom_prices: item.uom_prices || {},
+				// Tile items: quantity is rounded up to whole pieces
+				custom_pieces_per_box: item.custom_pieces_per_box || 0,
 				// Add item_group and brand for offer eligibility checking
 				item_group: item.item_group,
 				brand: item.brand,
@@ -303,18 +311,16 @@ export function useInvoice() {
 				allow_negative_stock: item.allow_negative_stock || 0,
 			};
 			invoiceItems.value.push(newItem);
+			tileChange = roundTileQuantity(newItem);
 			// Recalculate the newly added item to apply taxes
 			recalculateItem(newItem);
 
 			// Update cache incrementally (add new item values)
-			// Use rounded price_list_rate for subtotal to match ERPNext
-			const priceListRate = newItem.price_list_rate || newItem.rate;
-			_cachedSubtotal.value += roundCurrency(
-				newItem.quantity * roundCurrency(priceListRate)
-			);
+			_cachedSubtotal.value += lineBaseAmount(newItem);
 			_cachedTotalTax.value += newItem.tax_amount || 0;
 			_cachedTotalDiscount.value += newItem.discount_amount || 0;
 		}
+		return tileChange;
 	}
 
 	/**
@@ -333,14 +339,7 @@ export function useInvoice() {
 
 		if (itemToRemove) {
 			// Update cache incrementally (subtract removed item values)
-			// Use effective rate (manually edited rate or price_list_rate)
-			const isManuallyEdited = itemToRemove.is_rate_manually_edited === 1;
-			const effectiveRate = isManuallyEdited
-				? itemToRemove.rate
-				: itemToRemove.price_list_rate || itemToRemove.rate;
-			_cachedSubtotal.value -= roundCurrency(
-				itemToRemove.quantity * roundCurrency(effectiveRate)
-			);
+			_cachedSubtotal.value -= lineBaseAmount(itemToRemove);
 			_cachedTotalTax.value -= itemToRemove.tax_amount || 0;
 			_cachedTotalDiscount.value -= itemToRemove.discount_amount || 0;
 
@@ -375,10 +374,7 @@ export function useInvoice() {
 
 		if (item) {
 			// Store old values before update for incremental cache adjustment
-			// Use effective rate (manually edited rate or price_list_rate)
-			const isManuallyEdited = item.is_rate_manually_edited === 1;
-			const effectiveRate = isManuallyEdited ? item.rate : item.price_list_rate || item.rate;
-			const oldAmount = roundCurrency(item.quantity * roundCurrency(effectiveRate));
+			const oldAmount = lineBaseAmount(item);
 			const oldTax = item.tax_amount || 0;
 			const oldDiscount = item.discount_amount || 0;
 			const oldQuantity = item.quantity;
@@ -407,9 +403,7 @@ export function useInvoice() {
 			recalculateItem(item);
 
 			// Update cache incrementally (new values - old values)
-			// Use effective rate for manually edited items
-			_cachedSubtotal.value +=
-				roundCurrency(item.quantity * roundCurrency(effectiveRate)) - oldAmount;
+			_cachedSubtotal.value += lineBaseAmount(item) - oldAmount;
 			_cachedTotalTax.value += (item.tax_amount || 0) - oldTax;
 			_cachedTotalDiscount.value += (item.discount_amount || 0) - oldDiscount;
 		}
@@ -419,12 +413,11 @@ export function useInvoice() {
 		const item = invoiceItems.value.find((i) => i.item_code === itemCode);
 		if (item) {
 			// Store old values before update for incremental cache adjustment
-			// Use effective rate (manually edited rate or price_list_rate)
 			const wasManuallyEdited = item.is_rate_manually_edited === 1;
 			const oldEffectiveRate = wasManuallyEdited
 				? item.rate
 				: item.price_list_rate || item.rate;
-			const oldAmount = roundCurrency(item.quantity * roundCurrency(oldEffectiveRate));
+			const oldAmount = lineBaseAmount(item);
 			const oldTax = item.tax_amount || 0;
 			const oldDiscount = item.discount_amount || 0;
 
@@ -445,13 +438,7 @@ export function useInvoice() {
 			recalculateItem(item);
 
 			// Update cache incrementally (new values - old values)
-			// Use the new rate for manually edited items
-			const isNowManuallyEdited = item.is_rate_manually_edited === 1;
-			const newEffectiveRate = isNowManuallyEdited
-				? item.rate
-				: item.price_list_rate || item.rate;
-			_cachedSubtotal.value +=
-				roundCurrency(item.quantity * roundCurrency(newEffectiveRate)) - oldAmount;
+			_cachedSubtotal.value += lineBaseAmount(item) - oldAmount;
 			_cachedTotalTax.value += (item.tax_amount || 0) - oldTax;
 			_cachedTotalDiscount.value += (item.discount_amount || 0) - oldDiscount;
 		}
@@ -466,10 +453,7 @@ export function useInvoice() {
 			if (validDiscount > 100) validDiscount = 100;
 
 			// Store old values before update for incremental cache adjustment
-			// Use effective rate (manually edited rate or price_list_rate)
-			const isManuallyEdited = item.is_rate_manually_edited === 1;
-			const effectiveRate = isManuallyEdited ? item.rate : item.price_list_rate || item.rate;
-			const oldAmount = roundCurrency(item.quantity * roundCurrency(effectiveRate));
+			const oldAmount = lineBaseAmount(item);
 			const oldTax = item.tax_amount || 0;
 			const oldDiscount = item.discount_amount || 0;
 
@@ -478,9 +462,7 @@ export function useInvoice() {
 			recalculateItem(item);
 
 			// Update cache incrementally (new values - old values)
-			// Use effective rate for manually edited items
-			_cachedSubtotal.value +=
-				roundCurrency(item.quantity * roundCurrency(effectiveRate)) - oldAmount;
+			_cachedSubtotal.value += lineBaseAmount(item) - oldAmount;
 			_cachedTotalTax.value += (item.tax_amount || 0) - oldTax;
 			_cachedTotalDiscount.value += (item.discount_amount || 0) - oldDiscount;
 		}
@@ -614,10 +596,7 @@ export function useInvoice() {
 		_cachedTotalDiscount.value = 0;
 
 		for (const item of invoiceItems.value) {
-			// Use manually edited rate if set, otherwise use price_list_rate
-			const isManuallyEdited = item.is_rate_manually_edited === 1;
-			const effectiveRate = isManuallyEdited ? item.rate : item.price_list_rate || item.rate;
-			_cachedSubtotal.value += roundCurrency(item.quantity * roundCurrency(effectiveRate));
+			_cachedSubtotal.value += lineBaseAmount(item);
 			_cachedTotalTax.value += item.tax_amount || 0;
 			_cachedTotalDiscount.value += item.discount_amount || 0;
 		}
@@ -626,6 +605,45 @@ export function useInvoice() {
 		for (const payment of payments.value) {
 			_cachedTotalPaid.value += payment.amount || 0;
 		}
+	}
+
+	/**
+	 * Amount of a line before discount and tax.
+	 * Tile lines are priced as whole pieces x Piece price (see updateTilePieces).
+	 */
+	function lineBaseAmount(item) {
+		if (item.tile_pieces != null) {
+			return roundCurrency(item.tile_pieces * roundCurrency(item.tile_piece_rate));
+		}
+		const isManuallyEdited = item.is_rate_manually_edited === 1;
+		const effectiveRate = isManuallyEdited ? item.rate : item.price_list_rate || item.rate;
+		return roundCurrency(item.quantity * roundCurrency(effectiveRate));
+	}
+
+	/**
+	 * Tile lines: store the whole pieces sold and the piece price, matching what the
+	 * "Sales Round off pieces" server script turns the row into.
+	 */
+	function updateTilePieces(item) {
+		const pieces = getLinePieces(item);
+		if (pieces === null) return;
+		item.tile_pieces = pieces;
+		item.tile_piece_rate = getLinePieceRate(item);
+	}
+
+	/**
+	 * Bump a tile line's quantity so it covers whole pieces
+	 * (5 SQM = 26.91 pieces -> 5.017 SQM = 27 pieces).
+	 * @returns {{ from: number, to: number, pieces: number }|null} The change, or null if none
+	 */
+	function roundTileQuantity(item) {
+		const pieces = getLinePieces(item);
+		if (pieces === null) return null;
+		const quantity = quantityForPieces(pieces, item.conversion_factor || 1);
+		if (quantity === item.quantity) return null;
+		const change = { from: item.quantity, to: quantity, pieces };
+		item.quantity = quantity;
+		return change;
 	}
 
 	/**
@@ -658,8 +676,8 @@ export function useInvoice() {
 		// If rate was manually edited, use the edited rate; otherwise use price_list_rate
 		const isManuallyEdited = item.is_rate_manually_edited === 1;
 		const effectiveRate = isManuallyEdited ? item.rate : item.price_list_rate || item.rate;
-		const roundedRate = roundCurrency(effectiveRate);
-		const baseAmount = roundCurrency(item.quantity * roundedRate);
+		updateTilePieces(item);
+		const baseAmount = lineBaseAmount(item);
 
 		// Calculate discount from either percentage or fixed amount
 		let discountAmount = 0;
@@ -705,8 +723,11 @@ export function useInvoice() {
 	 * - Tax-exclusive: net rate (amount / qty, after discount)
 	 */
 	function computeBackendRate(item) {
-		const qty = item.quantity || item.qty || 1;
-		const priceListRate = item.price_list_rate || item.rate || 0;
+		const isTileLine = item.tile_pieces != null;
+		const qty = (isTileLine ? item.tile_pieces : item.quantity || item.qty) || 1;
+		const priceListRate = isTileLine
+			? item.tile_piece_rate
+			: item.price_list_rate || item.rate || 0;
 		const discountAmount = item.discount_amount || 0;
 
 		if (taxInclusive.value) {
@@ -762,9 +783,22 @@ export function useInvoice() {
 			is_free_item: item.is_free_item || 0,
 		});
 
+		// Tile lines go out as whole Pieces, so the "Sales Round off pieces"
+		// server script has nothing left to convert and the total stays the same
+		const mapLine = (item) =>
+			item.tile_pieces == null
+				? mapRow(item)
+				: {
+						...mapRow(item),
+						qty: item.tile_pieces,
+						uom: PIECE_UOM,
+						conversion_factor: 1,
+						price_list_rate: item.is_free_item ? 0 : roundCurrency(item.tile_piece_rate),
+				  };
+
 		const out = [];
 		for (const item of items) {
-			out.push(mapRow(item));
+			out.push(mapLine(item));
 			const fq = Number.parseFloat(item.free_qty) || 0;
 			if (!item.is_free_item && fq > 0) {
 				const u = item.uom || item.stock_uom;
@@ -1314,6 +1348,7 @@ export function useInvoice() {
 		loadTaxRules,
 		setTaxInclusive,
 		recalculateItem,
+		roundTileQuantity,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
 		resolveUomPricing,

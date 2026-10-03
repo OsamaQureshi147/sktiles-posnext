@@ -5,6 +5,7 @@ import { usePOSShiftStore } from "@/stores/posShift";
 import { parseError } from "@/utils/errorHandler";
 import { shouldValidateItemStock, checkStockAvailability } from "@/utils/stockValidator";
 import { offlineState } from "@/utils/offline/offlineState";
+import { formatQty } from "@/utils/tileUom";
 import { useToast } from "@/composables/useToast";
 import { call } from "@/utils/apiWrapper";
 import { defineStore } from "pinia";
@@ -106,6 +107,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		getItemDetailsResource,
 		resolveUomPricing,
 		recalculateItem,
+		roundTileQuantity,
 		rebuildIncrementalCache,
 		formatItemsForSubmission,
 	} = useInvoice();
@@ -199,7 +201,39 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			}
 		}
 
-		addItemToInvoice(item, qty);
+		notifyTileRounding(item, addItemToInvoice(item, qty));
+	}
+
+	/**
+	 * Tell the cashier a tile quantity was bumped to whole pieces.
+	 * @param {Object} item - Cart line (or the item that was added)
+	 * @param {Object|null} change - Result of roundTileQuantity
+	 */
+	function notifyTileRounding(item, change) {
+		if (!change) return;
+		const uom = item.uom || item.stock_uom;
+		showWarning(
+			__("{0}: {1} {2} → {3} {2} = {4} pieces (can't sell a fraction of a tile)", [
+				item.item_code,
+				formatQty(change.from),
+				uom,
+				formatQty(change.to),
+				change.pieces,
+			])
+		);
+	}
+
+	/**
+	 * Bump a tile line's quantity to whole pieces once the cashier has finished
+	 * editing it (not while typing). Totals are already piece-based either way.
+	 * @param {Object} cartItem - Cart line
+	 */
+	function roundTileLine(cartItem) {
+		const change = roundTileQuantity(cartItem);
+		if (!change) return;
+		recalculateItem(cartItem);
+		rebuildIncrementalCache();
+		notifyTileRounding(cartItem, change);
 	}
 
 	/**
@@ -1336,6 +1370,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		recalculateItem(targetItem);
 		removeCartItem(sourceItem);
 		rebuildIncrementalCache();
+		roundTileLine(targetItem);
 		return targetItem.quantity;
 	}
 
@@ -1381,6 +1416,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			recalculateItem(cartItem);
 			rebuildIncrementalCache();
 			showSuccess(__("Unit changed to {0}", [newUom]));
+			roundTileLine(cartItem);
 		} catch (error) {
 			console.error("Error changing UOM:", error);
 			showError(__("Failed to update UOM. Please try again."));
@@ -1471,6 +1507,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 			recalculateItem(cartItem);
 			rebuildIncrementalCache();
 			showSuccess(__("{0} updated", [cartItem.item_name]));
+			roundTileLine(cartItem);
 			return true;
 		} catch (error) {
 			console.error("Error updating item:", error);
@@ -1960,6 +1997,7 @@ export const usePOSCartStore = defineStore("posCart", () => {
 		removeOffer,
 		reapplyOffer,
 		changeItemUOM,
+		roundTileLine,
 		updateItemDetails,
 		getItemDetailsResource,
 		resolveUomPricing,
