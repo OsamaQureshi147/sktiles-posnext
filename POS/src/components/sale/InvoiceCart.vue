@@ -1363,6 +1363,14 @@
 									</div>
 								</div>
 							</div>
+
+							<!-- Tile items: cart quantity in boxes + pieces -->
+							<p
+								v-if="getTileBreakdown(item)"
+								class="mt-1 text-[10px] sm:text-xs font-semibold text-amber-700"
+							>
+								= {{ getTileBreakdown(item) }}
+							</p>
 						</div>
 					</div>
 				</div>
@@ -1542,6 +1550,7 @@ import { createResource } from "frappe-ui";
 import { computed, onBeforeUnmount, onMounted, ref, watch, nextTick } from "vue";
 import CustomerBalance from "@/components/common/CustomerBalance.vue";
 import EditItemDialog from "./EditItemDialog.vue";
+import { formatQty, getCountBreakdown, getItemUomOptions, isTileItem } from "@/utils/tileUom";
 
 /**
  * ============================================================================
@@ -2173,6 +2182,20 @@ function handleQuantityBlur(item) {
 /**
  * Unique key per cart line: same item can appear with different UOMs / warehouses.
  */
+/**
+ * Whole-unit breakdown of a tile cart line, e.g. "6 Box + 4 Piece"
+ * (same conversion as the warehouse picker). Null for non-tile items,
+ * items with fewer than two count UOMs, or when it adds nothing.
+ */
+function getTileBreakdown(item) {
+	if (!isTileItem(item)) return null;
+	const stockQty = (item.quantity || 0) * (item.conversion_factor || 1);
+	const breakdown = getCountBreakdown(stockQty, getItemUomOptions(item));
+	if (!breakdown || breakdown.countOptions.length < 2) return null;
+	const uom = item.uom || item.stock_uom;
+	return breakdown.text !== `${formatQty(item.quantity)} ${uom}` ? breakdown.text : null;
+}
+
 function getUomDropdownKey(item) {
 	return `${item.item_code}-${item.uom}-${item.warehouse || ""}`;
 }
